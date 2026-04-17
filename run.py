@@ -3,9 +3,20 @@
 """
 import sys
 import os
+import subprocess
 
 # 确保项目路径在sys.path中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 检查是否为PM2环境（通过环境变量判断）
+if os.environ.get("PM2_HOME") or os.environ.get("PM2_LIST"):
+    # PM2环境下，隐藏控制台窗口
+    import ctypes
+    SEM_NOGPFAULTERRORBOX = 0x0002
+    ctypes.windll.kernel32.SetErrorMode(SEM_NOGPFAULTERRORBOX)
+    info = subprocess.STARTUPINFO()
+    info.dmFlags = subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0  # SW_HIDE = 0
 
 from app import create_app
 

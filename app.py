@@ -42,8 +42,9 @@ class CommentWriterApp:
         self,
         topic: str,
         num_comments: int,
-        direction: str,
+        directions: list,
         stance: str,
+        stance_custom: str,
         event_info: str
     ) -> str:
         """
@@ -52,8 +53,9 @@ class CommentWriterApp:
         Args:
             topic: 话题
             num_comments: 数量
-            direction: 方向
+            directions: 方向列表（可多选）
             stance: 立场（产品）
+            stance_custom: 自定义产品名称（"其他"选项时使用）
             event_info: 事件背景（可选）
 
         Returns:
@@ -65,21 +67,28 @@ class CommentWriterApp:
         if not topic or not topic.strip():
             return "请输入话题"
 
+        # 处理"其他"选项
+        if stance == "其他":
+            if not stance_custom or not stance_custom.strip():
+                return "请输入产品名称"
+            stance = stance_custom.strip()
+
         try:
-            comments = self.generator.generate(
+            # 一次性生成所有方向的评论
+            all_comments = self.generator.generate_for_directions(
                 topic=topic.strip(),
                 num_comments=num_comments,
-                direction=direction,
+                directions=directions,
                 stance=stance,
                 event_info=event_info.strip() if event_info else ""
             )
 
-            if not comments:
+            if not all_comments:
                 return "生成失败，请检查API配置或重试"
 
             # 格式化输出
             result = []
-            for i, c in enumerate(comments, 1):
+            for i, c in enumerate(all_comments, 1):
                 result.append(f"{i}. {c}")
 
             return "\n".join(result)
@@ -92,8 +101,9 @@ class CommentWriterApp:
         topic: str,
         perspective: str,
         num_comments: int,
-        direction: str,
+        directions: list,
         stance: str,
+        stance_custom: str,
         event_info: str
     ) -> str:
         """
@@ -103,8 +113,9 @@ class CommentWriterApp:
             topic: 话题
             perspective: 视角
             num_comments: 数量
-            direction: 方向
+            directions: 方向列表（可多选）
             stance: 立场（产品）
+            stance_custom: 自定义产品名称（"其他"选项时使用）
             event_info: 事件背景（可选）
 
         Returns:
@@ -119,21 +130,42 @@ class CommentWriterApp:
         if not perspective or not perspective.strip():
             return "请输入视角"
 
-        try:
-            comments = self.generator.generate_with立场(
-                topic=topic.strip(),
-                perspective=perspective.strip(),
-                num_comments=num_comments,
-                direction=direction,
-                stance=stance,
-                event_info=event_info.strip() if event_info else ""
-            )
+        # 处理"其他"选项
+        if stance == "其他":
+            if not stance_custom or not stance_custom.strip():
+                return "请输入产品名称"
+            stance = stance_custom.strip()
 
-            if not comments:
+        try:
+            # 计算每个方向的评论数量
+            all_comments = []
+            num_directions = len(directions)
+            base_count = num_comments // num_directions
+            remainder = num_comments % num_directions
+
+            for i, direction in enumerate(directions):
+                # 分配评论数量，轮流分配多出来的评论
+                dir_count = base_count + (1 if i < remainder else 0)
+                if dir_count == 0:
+                    continue
+
+                comments = self.generator.generate_with立场(
+                    topic=topic.strip(),
+                    perspective=perspective.strip(),
+                    num_comments=dir_count,
+                    direction=direction,
+                    stance=stance,
+                    event_info=event_info.strip() if event_info else ""
+                )
+
+                if comments:
+                    all_comments.extend(comments)
+
+            if not all_comments:
                 return "生成失败，请检查API配置或重试"
 
             result = []
-            for i, c in enumerate(comments, 1):
+            for i, c in enumerate(all_comments, 1):
                 result.append(f"{i}. {c}")
 
             return "\n".join(result)
@@ -175,7 +207,7 @@ def create_app() -> gr.Blocks:
                 with gr.Column(scale=3):
                     topic_input = gr.Textbox(
                         label="话题",
-                        placeholder="例如：孙策新皮肤、王者荣耀更新...",
+                        placeholder="事件标签，例如：#王者你已急哭头像框#、#洛克王国世界元宵喜乐会#...",
                         lines=2
                     )
                 with gr.Column(scale=1):
@@ -186,20 +218,36 @@ def create_app() -> gr.Blocks:
                         step=1,
                         label="评论数量"
                     )
-                    direction_dropdown = gr.Dropdown(
+                    direction_checkbox = gr.CheckboxGroup(
                         choices=["正性向", "中性向", "中正性向"],
-                        value="正性向",
-                        label="评论方向"
+                        value=["正性向"],
+                        label="评论方向（可多选）"
                     )
                     stance_dropdown = gr.Dropdown(
-                        choices=["王者荣耀", "原神", "三角洲行动", "洛克王国世界", "王者荣耀世界"],
+                        choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
                         value="王者荣耀",
                         label="立场（产品）"
                     )
 
+            with gr.Column(visible=False) as stance_custom_container:
+                stance_custom_input = gr.Textbox(
+                    label='请输入产品名称（选中"其他"时填写）',
+                    placeholder="输入产品名称",
+                    lines=1
+                )
+
+            def update_stance_visibility(stance):
+                return gr.update(visible=(stance == "其他"))
+
+            stance_dropdown.change(
+                fn=update_stance_visibility,
+                inputs=[stance_dropdown],
+                outputs=[stance_custom_container]
+            )
+
             event_info_input = gr.Textbox(
                 label="事件背景（可选）",
-                placeholder="如数据库无相关内容，可在此粘贴事件相关文章或详细背景信息...",
+                placeholder="可粘贴事件相关文章、补充事件的来龙去脉等，越详细生成的多样性越丰富",
                 lines=5
             )
 
@@ -212,7 +260,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn.click(
                 fn=app.generate_comments,
-                inputs=[topic_input, num_input, direction_dropdown, stance_dropdown, event_info_input],
+                inputs=[topic_input, num_input, direction_checkbox, stance_dropdown, stance_custom_input, event_info_input],
                 outputs=output_box
             )
 
@@ -224,7 +272,7 @@ def create_app() -> gr.Blocks:
                 with gr.Column(scale=3):
                     topic_input2 = gr.Textbox(
                         label="话题",
-                        placeholder="例如：原神玩家评价王者荣耀...",
+                        placeholder="事件标签，例如：#王者你已急哭头像框#、#洛克王国世界元宵喜乐会#...",
                         lines=2
                     )
                 with gr.Column(scale=1):
@@ -243,20 +291,36 @@ def create_app() -> gr.Blocks:
                         label="评论数量"
                     )
                 with gr.Column(scale=1):
-                    direction_dropdown2 = gr.Dropdown(
+                    direction_checkbox2 = gr.CheckboxGroup(
                         choices=["正性向", "中性向", "中正性向"],
-                        value="中正性向",
-                        label="评论方向"
+                        value=["中正性向"],
+                        label="评论方向（可多选）"
                     )
                     stance_dropdown2 = gr.Dropdown(
-                        choices=["王者荣耀", "原神", "三角洲行动", "洛克王国世界", "王者荣耀世界"],
+                        choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
                         value="王者荣耀",
                         label="立场（产品）"
                     )
 
+            with gr.Column(visible=False) as stance_custom_container2:
+                stance_custom_input2 = gr.Textbox(
+                    label='请输入产品名称（选中"其他"时填写）',
+                    placeholder="输入产品名称",
+                    lines=1
+                )
+
+            def update_stance_visibility2(stance):
+                return gr.update(visible=(stance == "其他"))
+
+            stance_dropdown2.change(
+                fn=update_stance_visibility2,
+                inputs=[stance_dropdown2],
+                outputs=[stance_custom_container2]
+            )
+
             event_info_input2 = gr.Textbox(
                 label="事件背景（可选）",
-                placeholder="如数据库无相关内容，可在此粘贴事件相关文章或详细背景信息...",
+                placeholder="可粘贴事件相关文章、补充事件的来龙去脉等，越详细生成的多样性越丰富",
                 lines=5
             )
 
@@ -269,7 +333,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn2.click(
                 fn=app.generate_with_perspective,
-                inputs=[topic_input2, perspective_input, num_input2, direction_dropdown2, stance_dropdown2, event_info_input2],
+                inputs=[topic_input2, perspective_input, num_input2, direction_checkbox2, stance_dropdown2, stance_custom_input2, event_info_input2],
                 outputs=output_box2
             )
 

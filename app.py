@@ -47,7 +47,8 @@ class CommentWriterApp:
         stance_custom: str,
         event_info: str,
         temperature: float = 0.8,
-        diversity: float = 0.7
+        diversity: float = 0.7,
+        seed: int = 42
     ) -> str:
         """
         生成评论
@@ -61,6 +62,7 @@ class CommentWriterApp:
             event_info: 事件背景（可选）
             temperature: LLM温度
             diversity: 检索多样性（MMR lambda），越低越多样
+            seed: 随机种子
 
         Returns:
             格式化后的评论文本
@@ -86,7 +88,8 @@ class CommentWriterApp:
                 stance=stance,
                 event_info=event_info.strip() if event_info else "",
                 temperature=temperature,
-                mmr_lambda=diversity
+                mmr_lambda=diversity,
+                seed=seed
             )
 
             if not all_comments:
@@ -112,7 +115,8 @@ class CommentWriterApp:
         stance_custom: str,
         event_info: str,
         temperature: float = 0.8,
-        diversity: float = 0.7
+        diversity: float = 0.7,
+        seed: int = 42
     ) -> str:
         """
         带视角生成评论
@@ -127,6 +131,7 @@ class CommentWriterApp:
             event_info: 事件背景（可选）
             temperature: LLM温度
             diversity: 检索多样性（MMR lambda）
+            seed: 随机种子
 
         Returns:
             格式化后的评论文本
@@ -167,7 +172,8 @@ class CommentWriterApp:
                     stance=stance,
                     event_info=event_info.strip() if event_info else "",
                     temperature=temperature,
-                    mmr_lambda=diversity
+                    mmr_lambda=diversity,
+                    seed=seed
                 )
 
                 if comments:
@@ -215,13 +221,13 @@ def create_app() -> gr.Blocks:
         status_box = gr.Textbox(label="系统状态", value=status, interactive=False)
 
         with gr.Tab("基础生成"):
+            topic_input = gr.Textbox(
+                label="话题",
+                placeholder="事件标签，例如：#王者你已急哭头像框#、#洛克王国世界元宵喜乐会#...",
+                lines=2
+            )
+
             with gr.Row():
-                with gr.Column(scale=3):
-                    topic_input = gr.Textbox(
-                        label="话题",
-                        placeholder="事件标签，例如：#王者你已急哭头像框#、#洛克王国世界元宵喜乐会#...",
-                        lines=2
-                    )
                 with gr.Column(scale=1):
                     num_input = gr.Slider(
                         minimum=1,
@@ -230,11 +236,13 @@ def create_app() -> gr.Blocks:
                         step=1,
                         label="评论数量"
                     )
+                with gr.Column(scale=1):
                     direction_checkbox = gr.CheckboxGroup(
                         choices=["正性向", "中性向", "中正性向"],
                         value=["正性向"],
                         label="评论方向（可多选）"
                     )
+                with gr.Column(scale=1):
                     temperature_slider = gr.Slider(
                         minimum=0.1,
                         maximum=1.0,
@@ -243,6 +251,7 @@ def create_app() -> gr.Blocks:
                         label="LLM温度",
                         info="0.1=更准确, 1.0=更多样"
                     )
+                with gr.Column(scale=1):
                     diversity_slider = gr.Slider(
                         minimum=0.3,
                         maximum=1.0,
@@ -251,18 +260,27 @@ def create_app() -> gr.Blocks:
                         label="检索多样性",
                         info="0.3=高多样, 1.0=高相关"
                     )
+
+            with gr.Row():
+                with gr.Column(scale=1):
                     stance_dropdown = gr.Dropdown(
                         choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
                         value="王者荣耀",
                         label="立场（产品）"
                     )
-
-            with gr.Column(visible=False) as stance_custom_container:
-                stance_custom_input = gr.Textbox(
-                    label='请输入产品名称（选中"其他"时填写）',
-                    placeholder="输入产品名称",
-                    lines=1
-                )
+                with gr.Column(scale=1):
+                    stance_custom_input = gr.Textbox(
+                        label='产品名称（选"其他"时填写）',
+                        placeholder="输入产品名称",
+                        lines=1,
+                        visible=False
+                    )
+                with gr.Column(scale=1):
+                    seed_input = gr.Number(
+                        value=42,
+                        label="随机种子",
+                        info="同一种子可复现结果"
+                    )
 
             def update_stance_visibility(stance):
                 return gr.update(visible=(stance == "其他"))
@@ -270,7 +288,7 @@ def create_app() -> gr.Blocks:
             stance_dropdown.change(
                 fn=update_stance_visibility,
                 inputs=[stance_dropdown],
-                outputs=[stance_custom_container]
+                outputs=[stance_custom_input]
             )
 
             event_info_input = gr.Textbox(
@@ -288,7 +306,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn.click(
                 fn=app.generate_comments,
-                inputs=[topic_input, num_input, direction_checkbox, stance_dropdown, stance_custom_input, event_info_input, temperature_slider, diversity_slider],
+                inputs=[topic_input, num_input, direction_checkbox, stance_dropdown, stance_custom_input, event_info_input, temperature_slider, diversity_slider, seed_input],
                 outputs=output_box
             )
 
@@ -297,7 +315,7 @@ def create_app() -> gr.Blocks:
             gr.Markdown("可以从不同人群的视角思考，但始终站在所选产品的立场")
 
             with gr.Row():
-                with gr.Column(scale=3):
+                with gr.Column(scale=2):
                     topic_input2 = gr.Textbox(
                         label="话题",
                         placeholder="事件标签，例如：#王者你已急哭头像框#、#洛克王国世界元宵喜乐会#...",
@@ -309,6 +327,7 @@ def create_app() -> gr.Blocks:
                         placeholder="例如：原神玩家、王者荣耀主播...",
                         lines=2
                     )
+
             with gr.Row():
                 with gr.Column(scale=1):
                     num_input2 = gr.Slider(
@@ -324,6 +343,7 @@ def create_app() -> gr.Blocks:
                         value=["中正性向"],
                         label="评论方向（可多选）"
                     )
+                with gr.Column(scale=1):
                     temperature_slider2 = gr.Slider(
                         minimum=0.1,
                         maximum=1.0,
@@ -332,6 +352,7 @@ def create_app() -> gr.Blocks:
                         label="LLM温度",
                         info="0.1=更准确, 1.0=更多样"
                     )
+                with gr.Column(scale=1):
                     diversity_slider2 = gr.Slider(
                         minimum=0.3,
                         maximum=1.0,
@@ -340,18 +361,27 @@ def create_app() -> gr.Blocks:
                         label="检索多样性",
                         info="0.3=高多样, 1.0=高相关"
                     )
+
+            with gr.Row():
+                with gr.Column(scale=1):
                     stance_dropdown2 = gr.Dropdown(
                         choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
                         value="王者荣耀",
                         label="立场（产品）"
                     )
-
-            with gr.Column(visible=False) as stance_custom_container2:
-                stance_custom_input2 = gr.Textbox(
-                    label='请输入产品名称（选中"其他"时填写）',
-                    placeholder="输入产品名称",
-                    lines=1
-                )
+                with gr.Column(scale=1):
+                    stance_custom_input2 = gr.Textbox(
+                        label='产品名称（选"其他"时填写）',
+                        placeholder="输入产品名称",
+                        lines=1,
+                        visible=False
+                    )
+                with gr.Column(scale=1):
+                    seed_input2 = gr.Number(
+                        value=42,
+                        label="随机种子",
+                        info="同一种子可复现结果"
+                    )
 
             def update_stance_visibility2(stance):
                 return gr.update(visible=(stance == "其他"))
@@ -359,7 +389,7 @@ def create_app() -> gr.Blocks:
             stance_dropdown2.change(
                 fn=update_stance_visibility2,
                 inputs=[stance_dropdown2],
-                outputs=[stance_custom_container2]
+                outputs=[stance_custom_input2]
             )
 
             event_info_input2 = gr.Textbox(
@@ -377,7 +407,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn2.click(
                 fn=app.generate_with_perspective,
-                inputs=[topic_input2, perspective_input, num_input2, direction_checkbox2, stance_dropdown2, stance_custom_input2, event_info_input2, temperature_slider2, diversity_slider2],
+                inputs=[topic_input2, perspective_input, num_input2, direction_checkbox2, stance_dropdown2, stance_custom_input2, event_info_input2, temperature_slider2, diversity_slider2, seed_input2],
                 outputs=output_box2
             )
 

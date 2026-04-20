@@ -225,7 +225,8 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
-        mmr_lambda: float = 0.7
+        mmr_lambda: float = 0.7,
+        seed: int = 42
     ) -> List[str]:
         """
         一次性生成多个方向的评论
@@ -238,6 +239,7 @@ class CommentGenerator:
             event_info: 事件背景（可选）
             temperature: LLM温度，0.1更准确，1.0更多样
             mmr_lambda: 检索多样性参数，0.3高多样，1.0高相关
+            seed: 随机种子，用于控制随机性
 
         Returns:
             所有方向合并的评论列表
@@ -246,7 +248,9 @@ class CommentGenerator:
         num_comments = max(1, min(100, num_comments))
 
         # 一次性检索所有方向的参考评论（使用MMR增加多样性）
-        retrieved = self.rag_retriever.retrieve_for_directions(topic, num_comments, directions, mmr_lambda=mmr_lambda)
+        retrieved = self.rag_retriever.retrieve_for_directions(
+            topic, num_comments, directions, mmr_lambda=mmr_lambda, event_info=event_info, seed=seed
+        )
         reference = [r["comment"] for r in retrieved]
 
         if not reference:
@@ -346,10 +350,13 @@ class CommentGenerator:
 **【参考评论（学习风格）】**
 {reference_text}
 
-**【内容多样性要求（重要）】**
-- 每条评论必须有独特的信息点或表达方式，严禁内容重复或高度相似
+**【内容多样性要求（极其重要）】**
+- **严禁重复**：即使是同一方向的评论，每条也必须有独特的信息点
+- 禁止出现相似的观点、相似的表达方式、相似的句式结构
+- 每条评论的切入角度必须不同：有的从时间角度，有的从体验角度，有的从对比角度
 - 充分利用产品背景信息，生成贴合产品特性的具体评论
 - 避免空泛套话，短评也要有具体观察或明确态度
+- **重要**：同一批生成的多条评论之间，互相之间不能有明显的相似表达
 
 ## 输出格式
 请以JSON数组格式输出{num_comments}条评论，每条评论需标注所属方向：
@@ -489,7 +496,8 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
-        mmr_lambda: float = 0.7
+        mmr_lambda: float = 0.7,
+        seed: int = 42
     ) -> List[str]:
         """
         生成带有特定视角的评论
@@ -503,11 +511,12 @@ class CommentGenerator:
             event_info: 事件背景（可选）
             temperature: LLM温度
             mmr_lambda: 检索多样性参数
+            seed: 随机种子
         """
         # 在检索时加入视角和立场信息
         search_topic = f"{topic} {perspective} {stance}"
 
-        retrieved = self.rag_retriever.retrieve_for_directions(search_topic, num_comments, [direction], mmr_lambda=mmr_lambda)
+        retrieved = self.rag_retriever.retrieve_for_directions(search_topic, num_comments, [direction], mmr_lambda=mmr_lambda, seed=seed)
         reference = [r["comment"] for r in retrieved]
 
         event_section = f"\n\n**【事件详细背景】**\n{event_info}" if event_info.strip() else ""

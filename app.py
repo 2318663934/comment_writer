@@ -45,7 +45,9 @@ class CommentWriterApp:
         directions: list,
         stance: str,
         stance_custom: str,
-        event_info: str
+        event_info: str,
+        temperature: float = 0.8,
+        diversity: float = 0.7
     ) -> str:
         """
         生成评论
@@ -57,6 +59,8 @@ class CommentWriterApp:
             stance: 立场（产品）
             stance_custom: 自定义产品名称（"其他"选项时使用）
             event_info: 事件背景（可选）
+            temperature: LLM温度
+            diversity: 检索多样性（MMR lambda），越低越多样
 
         Returns:
             格式化后的评论文本
@@ -80,7 +84,9 @@ class CommentWriterApp:
                 num_comments=num_comments,
                 directions=directions,
                 stance=stance,
-                event_info=event_info.strip() if event_info else ""
+                event_info=event_info.strip() if event_info else "",
+                temperature=temperature,
+                mmr_lambda=diversity
             )
 
             if not all_comments:
@@ -104,7 +110,9 @@ class CommentWriterApp:
         directions: list,
         stance: str,
         stance_custom: str,
-        event_info: str
+        event_info: str,
+        temperature: float = 0.8,
+        diversity: float = 0.7
     ) -> str:
         """
         带视角生成评论
@@ -117,6 +125,8 @@ class CommentWriterApp:
             stance: 立场（产品）
             stance_custom: 自定义产品名称（"其他"选项时使用）
             event_info: 事件背景（可选）
+            temperature: LLM温度
+            diversity: 检索多样性（MMR lambda）
 
         Returns:
             格式化后的评论文本
@@ -155,7 +165,9 @@ class CommentWriterApp:
                     num_comments=dir_count,
                     direction=direction,
                     stance=stance,
-                    event_info=event_info.strip() if event_info else ""
+                    event_info=event_info.strip() if event_info else "",
+                    temperature=temperature,
+                    mmr_lambda=diversity
                 )
 
                 if comments:
@@ -223,6 +235,22 @@ def create_app() -> gr.Blocks:
                         value=["正性向"],
                         label="评论方向（可多选）"
                     )
+                    temperature_slider = gr.Slider(
+                        minimum=0.1,
+                        maximum=1.0,
+                        value=0.8,
+                        step=0.1,
+                        label="LLM温度",
+                        info="0.1=更准确, 1.0=更多样"
+                    )
+                    diversity_slider = gr.Slider(
+                        minimum=0.3,
+                        maximum=1.0,
+                        value=0.7,
+                        step=0.1,
+                        label="检索多样性",
+                        info="0.3=高多样, 1.0=高相关"
+                    )
                     stance_dropdown = gr.Dropdown(
                         choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
                         value="王者荣耀",
@@ -260,7 +288,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn.click(
                 fn=app.generate_comments,
-                inputs=[topic_input, num_input, direction_checkbox, stance_dropdown, stance_custom_input, event_info_input],
+                inputs=[topic_input, num_input, direction_checkbox, stance_dropdown, stance_custom_input, event_info_input, temperature_slider, diversity_slider],
                 outputs=output_box
             )
 
@@ -295,6 +323,22 @@ def create_app() -> gr.Blocks:
                         choices=["正性向", "中性向", "中正性向"],
                         value=["中正性向"],
                         label="评论方向（可多选）"
+                    )
+                    temperature_slider2 = gr.Slider(
+                        minimum=0.1,
+                        maximum=1.0,
+                        value=0.8,
+                        step=0.1,
+                        label="LLM温度",
+                        info="0.1=更准确, 1.0=更多样"
+                    )
+                    diversity_slider2 = gr.Slider(
+                        minimum=0.3,
+                        maximum=1.0,
+                        value=0.7,
+                        step=0.1,
+                        label="检索多样性",
+                        info="0.3=高多样, 1.0=高相关"
                     )
                     stance_dropdown2 = gr.Dropdown(
                         choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
@@ -333,7 +377,7 @@ def create_app() -> gr.Blocks:
 
             generate_btn2.click(
                 fn=app.generate_with_perspective,
-                inputs=[topic_input2, perspective_input, num_input2, direction_checkbox2, stance_dropdown2, stance_custom_input2, event_info_input2],
+                inputs=[topic_input2, perspective_input, num_input2, direction_checkbox2, stance_dropdown2, stance_custom_input2, event_info_input2, temperature_slider2, diversity_slider2],
                 outputs=output_box2
             )
 

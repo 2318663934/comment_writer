@@ -125,6 +125,104 @@ class VectorStore:
         collection.flush()
         print(f"成功插入 {len(comments)} 条评论")
 
+    def search_mmr(
+        self,
+        query: str,
+        top_k: int = 20,
+        mmr_lambda: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        使用MMR（最大边际相关）算法搜索多样化的评论
+
+        Args:
+            query: 搜索文本
+            top_k: 返回数量
+            mmr_lambda: MMR参数，0-1之间，越高越注重相关性，越低越注重多样性
+
+        Returns:
+            多样化搜索结果列表
+        """
+        import numpy as np
+
+        collection = Collection(self.collection_name)
+        collection.load()
+
+        # 生成查询向量
+        query_embedding = self.embed_comments([query])[0]
+
+        # 先检索更多候选（确保有足够选择空间）
+        candidate_count = min(top_k * 5, 100)
+        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+        results = collection.search(
+            data=[query_embedding.tolist()],
+            anns_field="embedding",
+            param=search_params,
+            limit=candidate_count,
+            output_fields=["comment", "engagement", "embedding"]
+        )
+
+        # 提取候选结果和向量（过滤掉embedding为None的结果）
+        candidates = []
+        candidate_embeddings = []
+        for hits in results:
+            for hit in hits:
+                emb = hit.entity.get("embedding")
+                if emb is None:
+                    continue
+                candidates.append({
+                    "id": hit.id,
+                    "comment": hit.entity.get("comment"),
+                    "engagement": hit.entity.get("engagement"),
+                    "distance": hit.distance
+                })
+                candidate_embeddings.append(emb)
+
+        if not candidates:
+            return []
+
+        candidate_embeddings = np.array(candidate_embeddings)
+
+        # 计算查询与所有候选的相关性（转换为相似度，距离越小越相似）
+        # L2距离转相似度: sim = 1 / (1 + distance)
+        similarities = 1.0 / (1.0 + np.array([c["distance"] for c in candidates]))
+
+        # MMR选择
+        selected = []
+        remaining_indices = list(range(len(candidates)))
+
+        for _ in range(min(top_k, len(candidates))):
+            if not remaining_indices:
+                break
+
+            best_score = -float('inf')
+            best_idx = None
+
+            for idx in remaining_indices:
+                # 相关性分数
+                relevance = similarities[idx]
+
+                # 多样性分数：与已选中结果的最大相似度
+                if selected:
+                    selected_embeddings = np.array([candidate_embeddings[i] for i in selected])
+                    diff = selected_embeddings - candidate_embeddings[idx]
+                    diversities = 1.0 / (1.0 + np.linalg.norm(diff, axis=1))
+                    diversity = float(np.max(diversities))
+                else:
+                    diversity = 0.0
+
+                # MMR分数
+                mmr_score = mmr_lambda * float(relevance) - (1 - mmr_lambda) * diversity
+
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = idx
+
+            if best_idx is not None:
+                selected.append(best_idx)
+                remaining_indices.remove(best_idx)
+
+        return [candidates[i] for i in selected]
+
     def search(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
         """
         搜索最相似的评论

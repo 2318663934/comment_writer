@@ -35,15 +35,17 @@ class RAGRetriever:
         self,
         topic: str,
         num_comments: int,
-        directions: List[str]
+        directions: List[str],
+        mmr_lambda: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        检索与话题相关的评论（支持多方向一次性检索）
+        检索与话题相关的评论（支持多方向一次性检索，使用MMR增加多样性）
 
         Args:
             topic: 用户输入的话题
             num_comments: 需要生成的评论数量
             directions: 评论方向列表
+            mmr_lambda: MMR参数，0-1之间，越高越注重相关性，越低越注重多样性
 
         Returns:
             检索到的评论列表（去重后）
@@ -54,16 +56,13 @@ class RAGRetriever:
         # 构建检索query，合并所有方向的关键词
         search_query = self._build_search_query(topic, directions)
 
-        # 执行向量检索
-        results = self.vector_store.search(search_query, top_k=retrieval_count)
+        # 使用MMR算法执行向量检索
+        results = self.vector_store.search_mmr(search_query, top_k=retrieval_count, mmr_lambda=mmr_lambda)
 
-        # 过滤：使用最宽松条件，保留所有相关结果
+        # 过滤：使用宽松条件
         filtered = [r for r in results if r["distance"] < 3.0]
 
-        # 按相关性排序并去重
-        deduped = self._deduplicate(filtered)
-
-        return deduped[:retrieval_count]
+        return filtered[:retrieval_count]
 
     def _build_search_query(self, topic: str, directions: List[str]) -> str:
         """

@@ -223,7 +223,9 @@ class CommentGenerator:
         num_comments: int,
         directions: List[str],
         stance: str = "王者荣耀",
-        event_info: str = ""
+        event_info: str = "",
+        temperature: float = 0.8,
+        mmr_lambda: float = 0.7
     ) -> List[str]:
         """
         一次性生成多个方向的评论
@@ -234,6 +236,8 @@ class CommentGenerator:
             directions: 评论方向列表
             stance: 立场（产品）
             event_info: 事件背景（可选）
+            temperature: LLM温度，0.1更准确，1.0更多样
+            mmr_lambda: 检索多样性参数，0.3高多样，1.0高相关
 
         Returns:
             所有方向合并的评论列表
@@ -241,8 +245,8 @@ class CommentGenerator:
         # 限制数量范围
         num_comments = max(1, min(100, num_comments))
 
-        # 一次性检索所有方向的参考评论（风格各异的样本）
-        retrieved = self.rag_retriever.retrieve_for_directions(topic, num_comments, directions)
+        # 一次性检索所有方向的参考评论（使用MMR增加多样性）
+        retrieved = self.rag_retriever.retrieve_for_directions(topic, num_comments, directions, mmr_lambda=mmr_lambda)
         reference = [r["comment"] for r in retrieved]
 
         if not reference:
@@ -256,8 +260,8 @@ class CommentGenerator:
             topic, num_comments, directions, reference, stance, event_info, product_section
         )
 
-        # 调用LLM一次性生成
-        comments = self._call_llm(prompt, num_comments)
+        # 调用LLM一次性生成，传入温度参数
+        comments = self._call_llm(prompt, num_comments, temperature)
 
         return comments
 
@@ -395,7 +399,7 @@ class CommentGenerator:
 
         return prompt
 
-    def _call_llm(self, prompt: str, num_comments: int) -> List[str]:
+    def _call_llm(self, prompt: str, num_comments: int, temperature: float = 0.8) -> List[str]:
         """调用LLM生成评论"""
         try:
             response = self.client.chat.completions.create(
@@ -404,7 +408,7 @@ class CommentGenerator:
                     {"role": "system", "content": "你是一个帮助生成游戏评论的助手。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.8,  # 较高的temperature增加多样性
+                temperature=temperature,
                 max_tokens=8000
             )
 
@@ -483,7 +487,9 @@ class CommentGenerator:
         num_comments: int = 5,
         direction: str = "中性向",
         stance: str = "王者荣耀",
-        event_info: str = ""
+        event_info: str = "",
+        temperature: float = 0.8,
+        mmr_lambda: float = 0.7
     ) -> List[str]:
         """
         生成带有特定视角的评论
@@ -495,11 +501,13 @@ class CommentGenerator:
             direction: 评论方向
             stance: 立场（产品）
             event_info: 事件背景（可选）
+            temperature: LLM温度
+            mmr_lambda: 检索多样性参数
         """
         # 在检索时加入视角和立场信息
         search_topic = f"{topic} {perspective} {stance}"
 
-        retrieved = self.rag_retriever.retrieve(search_topic, num_comments, direction)
+        retrieved = self.rag_retriever.retrieve_for_directions(search_topic, num_comments, [direction], mmr_lambda=mmr_lambda)
         reference = [r["comment"] for r in retrieved]
 
         event_section = f"\n\n**【事件详细背景】**\n{event_info}" if event_info.strip() else ""
@@ -613,7 +621,7 @@ class CommentGenerator:
 {{"comments": ["评论1", "评论2", ...]}}
 只输出JSON，不要输出任何思考过程或解释。
 """
-        return self._call_llm(prompt, num_comments)
+        return self._call_llm(prompt, num_comments, temperature)
 
 
 if __name__ == "__main__":

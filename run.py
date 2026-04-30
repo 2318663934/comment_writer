@@ -19,6 +19,7 @@ if os.environ.get("PM2_HOME") or os.environ.get("PM2_LIST"):
     info.wShowWindow = 0  # SW_HIDE = 0
 
 from app import create_app
+from app import AllowIframeMiddleware
 
 
 def main():
@@ -36,6 +37,7 @@ def main():
 
     # 创建并启动Gradio应用
     demo = create_app()
+    demo.app.add_middleware(AllowIframeMiddleware)
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,

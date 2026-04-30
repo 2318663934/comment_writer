@@ -151,8 +151,8 @@ class VectorStore:
         query_embedding = self.embed_comments([query])[0]
 
         # 先检索更多候选（确保有足够选择空间）
-        candidate_count = min(top_k * 5, 100)
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+        candidate_count = min(top_k * 10, 200)
+        search_params = {"metric_type": "L2", "params": {"nprobe": 16}}
         results = collection.search(
             data=[query_embedding.tolist()],
             anns_field="embedding",

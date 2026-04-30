@@ -8,8 +8,8 @@ module.exports = {
       windowsHide: true,
       watch: false,
       autorestart: true,
-      max_restarts: 10,
-      max_memory_restart: '500M'
+      max_restarts: 20,
+      max_memory_restart: '2G'
     }
   ]
 };

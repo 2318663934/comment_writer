@@ -40,6 +40,18 @@ def build_database(batch_size: int = 500, force_recreate: bool = False):
         print("错误: 未找到有效评论数据")
         return
 
+    # 质量过滤（去除官方/营销风格的差评）
+    print("\n[3.3/4] 质量过滤...")
+    from data_loader import filter_by_quality
+    comments = filter_by_quality(comments, min_score=0.3)
+    print(f"质量过滤后剩余 {len(comments)} 条评论")
+
+    # 语义去重
+    print("\n[3.5/4] 语义去重...")
+    from data_loader import semantic_deduplicate
+    comments = semantic_deduplicate(comments, threshold=0.82)
+    print(f"去重后剩余 {len(comments)} 条评论")
+
     # 批量插入
     print(f"\n[4/4] 插入向量数据 (共{len(comments)}条)...")
 

@@ -26,6 +26,15 @@ SYSTEM_PROMPT = """你是一个真实的游戏玩家，正在网上随手发表�
 - 禁止三明治结构（先夸后批再总结），表达完立刻结束
 - 禁止AI式结尾："希望官方能改""不过也能理解""你们觉得怎么样"
 
+## 评论内容规律
+真实玩家评论不会只围绕一个主题转。同一个人可能：
+- 说着活动突然吐槽起匹配机制
+- 讨论皮肤时想起自己当年的某次抽卡
+- 聊着新版本怀念起旧版本的好
+- 从KFC联动想到上次联动的社死经历
+部分评论应该和主题只有松散关联，甚至完全跑题聊自己的事。
+不要所有评论都只讨论事件背景提到的点。
+
 ## 评论结构多样性
 每条评论从以下风格随机选取，同批不能重复：
 纯感受 / 细节碎片 / 自言自语 / 对比吐槽 / 话说一半 / 带个人数据
@@ -57,6 +66,30 @@ VIEWER_MODE_PROMPT = """**【重要：你的身份是刚看完这个内容的观
 - 提到内容要像"刚看过"一样自然（"看到XX的时候""那个镜头"），禁止用"视频中显示""根据画面"等书面语
 - 抓住值得讨论的细节来写，不要泛泛而谈
 """
+
+# 头脑风暴 prompt（在角度生成和评论生成之间，让 LLM 基于事件+产品自由发散）
+BRAINSTORM_PROMPT = """你是一个资深游戏玩家和舆情观察者。请基于以下信息做一次头脑风暴。
+
+【产品名称】{stance}
+【事件背景】{event_info}
+{product_section}
+
+请从以下每个维度各想1-2个切入点，总共{num_angles}个：
+
+1. **玩家情绪/心理**：事件会触动玩家的什么感受？期待、失望、好奇、怀旧、焦虑、兴奋？
+2. **产品/玩法层面**：对游戏本身有什么影响？平衡性、肝度、社交体验、新手友好度？
+3. **商业/运营视角**：官方为什么这么做？定价策略、营销手法、时机选择？
+4. **社区/舆论角度**：玩家圈子里会怎么讨论？不同群体的看法会有什么分歧？
+5. **对比/联想**：和过去类似的事件、其他游戏的类似操作有什么可比之处？
+6. **发散/跑题**：玩家讨论这件事时，可能会联想到哪些不直接相关的话题？
+   例如：从联动想起以前的联动、从某个道具想起自己的游戏经历、从活动规则想起日常吐槽点
+
+要求：每个切入点必须具体、有讨论价值。允许合理推测，但要标注"可能""或许""会不会"。
+严禁编造不存在的活动、数据、角色。
+
+请以JSON格式输出：
+{{"brainstorm": ["切入点1", "切入点2", ...]}}
+{json_out}"""
 
 # 角度生成 prompt（两阶段生成的第一阶段）
 ANGLE_GENERATION_PROMPT = """针对以下话题，列出{num_angles}个不同的评论切入点（角度）。
@@ -252,6 +285,60 @@ class CommentGenerator:
             print(f"角度生成出错: {e}")
             return []
 
+    def _brainstorm(
+        self,
+        stance: str,
+        event_info: str,
+        product_section: str = "",
+        num_points: int = 10
+    ) -> List[str]:
+        """
+        Stage 1.5: 基于事件信息 + 产品知识，LLM 头脑风暴讨论切入点
+
+        与角度生成的区别：
+        - 角度生成是轻量的"标签"（如"排队时间影响体验"）
+        - 头脑风暴是深度的"讨论方向"，结合了事件细节和产品特性
+        """
+        if not event_info.strip():
+            return []
+
+        prompt = BRAINSTORM_PROMPT.format(
+            stance=stance,
+            event_info=event_info[:2000],
+            product_section=product_section[:1500] if product_section else "（无产品背景信息）",
+            num_angles=num_points,
+            json_out=JSON_OUTPUT_INSTRUCTION
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是一个游戏舆情分析师。请以JSON格式输出。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1500
+            )
+
+            content = response.choices[0].message.content
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1
+            if json_start != -1 and json_end > json_start:
+                data = json.loads(content[json_start:json_end])
+                points = data.get("brainstorm", [])
+                if points:
+                    print(f"头脑风暴完成: {len(points)}个切入点")
+                    return points
+
+            print("头脑风暴 JSON 解析失败，回退为空")
+            return []
+        except Exception as e:
+            print(f"头脑风暴失败: {e}")
+            return []
+
     # ============================================================
     # 主生成方法
     # ============================================================
@@ -275,26 +362,28 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
-        mmr_lambda: float = 0.7,
-        seed: int = 42
+        use_rag: bool = True,
+        use_kb: bool = True
     ) -> List[str]:
         """两阶段生成：先定角度，再写评论。topic 为空时从 event_info 推导。"""
         if directions is None:
             directions = ["中性向"]
         num_comments = max(1, min(100, num_comments))
-        random.seed(seed)
 
         # topic 为空时从 event_info 推导
         if not topic or not topic.strip():
             topic = event_info[:80] if event_info else ""
         context = topic or stance
 
-        # Stage 0: RAG 检索
-        retrieved = self.rag_retriever.retrieve_for_directions(
-            context, num_comments, directions, mmr_lambda=mmr_lambda,
-            event_info=event_info, seed=seed
-        )
-        reference = [r["comment"] for r in retrieved]
+        # Stage 0: RAG 检索（可选关闭以对比无数据库效果）
+        if use_rag and self.rag_retriever:
+            retrieved = self.rag_retriever.retrieve_for_directions(
+                context, num_comments, directions, mmr_lambda=0.3,
+                event_info=event_info, seed=0
+            )
+            reference = [r["comment"] for r in retrieved]
+        else:
+            reference = []
 
         # Stage 1: 生成角度
         num_angles = min(num_comments + 5, num_comments * 2, 30)
@@ -302,8 +391,18 @@ class CommentGenerator:
         if not angles:
             angles = []
 
+        # Stage 1.5: 头脑风暴（基于事件+产品知识自由发散讨论点）
+        product_section = ""
+        if use_kb:
+            product_section = self._retrieve_product_knowledge(topic or stance, stance, top_k=10)
+        brainstorm = self._brainstorm(
+            stance=stance,
+            event_info=event_info,
+            product_section=product_section,
+            num_points=max(num_comments // 2, 5)
+        )
+
         # Stage 2: 生成评论
-        product_section = self._retrieve_product_knowledge(topic or stance, stance, top_k=10)
         prompt = self._build_comment_prompt(
             topic=topic,
             num_comments=num_comments,
@@ -312,7 +411,8 @@ class CommentGenerator:
             stance=stance,
             event_info=event_info,
             product_section=product_section,
-            angles=angles
+            angles=angles,
+            brainstorm=brainstorm
         )
 
         comments = self._call_llm(prompt, num_comments, temperature)
@@ -353,9 +453,10 @@ class CommentGenerator:
         event_info: str = "",
         product_section: str = "",
         angles: List[str] = None,
+        brainstorm: List[str] = None,
         extra_header: str = ""
     ) -> str:
-        """构建评论生成的 user prompt（_build_v2_prompt 和 generate_with立场 共用）"""
+        """构建评论生成的 user prompt"""
 
         # 方向规格
         direction_specs = []
@@ -375,12 +476,28 @@ class CommentGenerator:
         else:
             event_section = ""
 
-        # 角度
+        # 角度（打乱顺序 + 不强制一一对应，避免 LLM 按序映射导致重复）
         if angles:
-            angle_list = "\n".join([f"{i+1}. {a}" for i, a in enumerate(angles)])
-            angle_section = f"\n**【必须覆盖的评论切入点】**\n{angle_list}\n\n重要：每条评论必须对应一个不同的切入点。"
+            import random as _random
+            shuffled = list(angles)
+            _random.shuffle(shuffled)
+            angle_list = "\n".join([f"- {a}" for a in shuffled])
+            angle_section = f"\n**【可参考的评论切入点】**\n{angle_list}\n\n以上是灵感来源。可以混合使用、自由跳转，不要去按顺序逐个覆盖。不同评论之间可以有交集但角度要错开。"
         else:
             angle_section = "\n**【内容多样性要求】**\n每条评论必须有独特的信息点和切入角度，严禁内容重复。"
+
+        # 头脑风暴结果（打乱顺序，避免 LLM 按序对应）
+        brainstorm_section = ""
+        if brainstorm:
+            import random as _random
+            shuffled = list(brainstorm)
+            _random.shuffle(shuffled)
+            b_list = "\n".join([f"- {b}" for b in shuffled])
+            brainstorm_section = f"""
+**【头脑风暴——以下是从事件中衍生出的值得讨论的点】**
+（这些是灵感来源，自由跳转使用。注意：带"可能""或许""会不会"的是推测，写评论时要保持不确定性）
+{b_list}
+"""
 
         # 参考评论（提供 2x 生成量，让 LLM 自由选择想参考的）
         ref_samples = reference[:num_comments * 2] if reference else []
@@ -407,8 +524,7 @@ class CommentGenerator:
 {num_short}条短评(15-40字)、{num_mid}条中评(40-70字)、{num_long}条长评(75字+)
 {event_section}
 {product_section if product_section else ""}
-{angle_section}
-
+{angle_section}{brainstorm_section}
 **【参考评论（仅学习风格）】**
 {ref_text}{ref_hint}
 
@@ -526,7 +642,6 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
-        mmr_lambda: float = 0.7,
         seed: int = 42
     ) -> List[str]:
         """
@@ -538,7 +653,7 @@ class CommentGenerator:
         # Stage 0: RAG 检索
         retrieved = self.rag_retriever.retrieve_for_directions(
             search_topic, num_comments, [direction],
-            mmr_lambda=mmr_lambda, seed=seed
+            mmr_lambda=0.3, seed=0
         )
         reference = [r["comment"] for r in retrieved]
 
@@ -551,6 +666,14 @@ class CommentGenerator:
             event_info=event_info
         )
 
+        # Stage 1.5: 头脑风暴
+        product_section = self._retrieve_product_knowledge(topic, stance)
+        brainstorm = self._brainstorm(
+            stance=stance, event_info=event_info,
+            product_section=product_section,
+            num_points=max(num_comments // 2, 5)
+        )
+
         # Stage 2: 复用公共 prompt 构建
         prompt = self._build_comment_prompt(
             topic=topic,
@@ -559,8 +682,9 @@ class CommentGenerator:
             reference=reference,
             stance=stance,
             event_info=event_info,
-            product_section=self._retrieve_product_knowledge(topic, stance),
+            product_section=product_section,
             angles=angles,
+            brainstorm=brainstorm,
             extra_header=f'\n**【模拟视角】**\n从"{perspective}"的视角发表评论\n'
         )
 

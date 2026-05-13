@@ -162,7 +162,7 @@ class RAGRetriever:
         topic: str,
         num_comments: int,
         directions: List[str],
-        mmr_lambda: float = 0.7,
+        mmr_lambda: float = 0.3,
         event_info: str = "",
         seed: int = 42
     ) -> List[Dict[str, Any]]:

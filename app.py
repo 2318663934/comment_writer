@@ -120,22 +120,15 @@ class CommentWriterApp:
         num_comments: int,
         directions: list,
         stance: str,
-        stance_custom: str,
         event_info: str,
         temperature: float = 0.8,
-        diversity: float = 0.7,
-        seed: int = 42,
-        media_extracted_text: str = ""
+        media_extracted_text: str = "",
+        use_rag: bool = True,
+        use_kb: bool = True
     ) -> str:
         """生成评论"""
         if not self.is_ready():
             return "系统未就绪，请确保已运行 build_database.py 构建数据库"
-
-        # 处理"其他"选项
-        if stance == "其他":
-            if not stance_custom or not stance_custom.strip():
-                return "请输入产品名称"
-            stance = stance_custom.strip()
 
         # 合并媒体提取内容到事件背景
         merged_event = self._merge_media_context(media_extracted_text, event_info)
@@ -148,8 +141,8 @@ class CommentWriterApp:
                 stance=stance,
                 event_info=merged_event.strip() if merged_event else "",
                 temperature=temperature,
-                mmr_lambda=diversity,
-                seed=seed
+                use_rag=use_rag,
+                use_kb=use_kb
             )
 
             if not all_comments:
@@ -170,11 +163,8 @@ class CommentWriterApp:
         num_comments: int,
         directions: list,
         stance: str,
-        stance_custom: str,
         event_info: str,
         temperature: float = 0.8,
-        diversity: float = 0.7,
-        seed: int = 42,
         media_extracted_text: str = ""
     ) -> str:
         """带视角生成评论"""
@@ -183,11 +173,6 @@ class CommentWriterApp:
 
         if not perspective or not perspective.strip():
             return "请输入视角"
-
-        if stance == "其他":
-            if not stance_custom or not stance_custom.strip():
-                return "请输入产品名称"
-            stance = stance_custom.strip()
 
         # 合并媒体提取内容到事件背景
         merged_event = self._merge_media_context(media_extracted_text, event_info)
@@ -210,9 +195,7 @@ class CommentWriterApp:
                     direction=direction,
                     stance=stance,
                     event_info=merged_event.strip() if merged_event else "",
-                    temperature=temperature,
-                    mmr_lambda=diversity,
-                    seed=seed
+                    temperature=temperature
                 )
 
                 if comments:
@@ -283,35 +266,10 @@ def create_app() -> gr.Blocks:
                         minimum=0.1, maximum=1.0, value=0.8, step=0.1,
                         label="创意程度", info="左=严谨保守, 右=天马行空"
                     )
-                with gr.Column(scale=1):
-                    diversity_slider = gr.Slider(
-                        minimum=0.3, maximum=1.0, value=0.7, step=0.1,
-                        label="内容新颖度", info="左=更多新鲜内容, 右=更贴近话题"
-                    )
-
-            with gr.Row():
-                with gr.Column(scale=1):
-                    stance_dropdown = gr.Dropdown(
-                        choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
-                        value="王者荣耀", label="产品选择"
-                    )
-                with gr.Column(scale=1):
-                    stance_custom_input = gr.Textbox(
-                        label='产品名称（选"其他"时填写）',
-                        placeholder="输入产品名称", lines=1, visible=False
-                    )
-                with gr.Column(scale=1):
-                    seed_input = gr.Number(
-                        value=42, label="结果可复现编号", info="相同编号可复现相同结果"
-                    )
-
-            def update_stance_visibility(stance):
-                return gr.update(visible=(stance == "其他"))
-
-            stance_dropdown.change(
-                fn=update_stance_visibility,
-                inputs=[stance_dropdown],
-                outputs=[stance_custom_input]
+            stance_dropdown = gr.Dropdown(
+                choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界"],
+                value="王者荣耀", label="产品选择",
+                allow_custom_value=True,
             )
 
             event_info_input = gr.Textbox(
@@ -342,6 +300,10 @@ def create_app() -> gr.Blocks:
                     lines=8, interactive=True
                 )
 
+            with gr.Row():
+                use_rag_checkbox = gr.Checkbox(label="使用参考评论数据库", value=True)
+                use_kb_checkbox = gr.Checkbox(label="使用产品信息库", value=True)
+
             generate_btn = gr.Button("生成评论", variant="primary")
 
             output_box = gr.Textbox(label="生成的评论", lines=15)
@@ -361,131 +323,15 @@ def create_app() -> gr.Blocks:
                 fn=app.generate_comments,
                 inputs=[
                     num_input, direction_checkbox,
-                    stance_dropdown, stance_custom_input, event_info_input,
-                    temperature_slider, diversity_slider, seed_input,
-                    media_extracted_output
+                    stance_dropdown, event_info_input,
+                    temperature_slider,
+                    media_extracted_output,
+                    use_rag_checkbox, use_kb_checkbox
                 ],
                 outputs=output_box
             )
-
         # ============================================================
-        # Tab 2: 多视角生成
-        # ============================================================
-        with gr.Tab("多视角生成"):
-            gr.Markdown("### 带视角的评论生成")
-            gr.Markdown("可以从不同人群的视角思考，但始终站在所选产品的立场")
-
-            with gr.Row():
-                with gr.Column(scale=1):
-                    perspective_input = gr.Textbox(
-                        label="视角",
-                        placeholder="例如：原神玩家、王者荣耀主播...",
-                        lines=2
-                    )
-
-            with gr.Row():
-                with gr.Column(scale=1):
-                    num_input2 = gr.Slider(
-                        minimum=1, maximum=100, value=5, step=1,
-                        label="评论数量"
-                    )
-                with gr.Column(scale=1):
-                    direction_checkbox2 = gr.CheckboxGroup(
-                        choices=["正性向", "中性向", "中正性向"],
-                        value=["中正性向"],
-                        label="评论方向（可多选）"
-                    )
-                with gr.Column(scale=1):
-                    temperature_slider2 = gr.Slider(
-                        minimum=0.1, maximum=1.0, value=0.8, step=0.1,
-                        label="创意程度", info="左=严谨保守, 右=天马行空"
-                    )
-                with gr.Column(scale=1):
-                    diversity_slider2 = gr.Slider(
-                        minimum=0.3, maximum=1.0, value=0.7, step=0.1,
-                        label="内容新颖度", info="左=更多新鲜内容, 右=更贴近话题"
-                    )
-
-            with gr.Row():
-                with gr.Column(scale=1):
-                    stance_dropdown2 = gr.Dropdown(
-                        choices=["王者荣耀", "DNF端游", "金铲铲之战", "无畏契约手游", "洛克王国世界", "王者荣耀世界", "其他"],
-                        value="王者荣耀", label="产品选择"
-                    )
-                with gr.Column(scale=1):
-                    stance_custom_input2 = gr.Textbox(
-                        label='产品名称（选"其他"时填写）',
-                        placeholder="输入产品名称", lines=1, visible=False
-                    )
-                with gr.Column(scale=1):
-                    seed_input2 = gr.Number(
-                        value=42, label="结果可复现编号", info="相同编号可复现相同结果"
-                    )
-
-            def update_stance_visibility2(stance):
-                return gr.update(visible=(stance == "其他"))
-
-            stance_dropdown2.change(
-                fn=update_stance_visibility2,
-                inputs=[stance_dropdown2],
-                outputs=[stance_custom_input2]
-            )
-
-            event_info_input2 = gr.Textbox(
-                label="事件背景（可选）",
-                placeholder="可粘贴事件相关文章、补充事件的来龙去脉等，越详细生成的多样性越丰富",
-                lines=5
-            )
-
-            with gr.Accordion("图片/视频辅助（可选，需 Ollama）", open=False):
-                gr.Markdown("上传图片/视频文件，或粘贴视频链接，点击「提取信息」后审核编辑")
-                media_input2 = gr.File(
-                    label="上传图片或视频（文件）",
-                    file_types=["image", "video"],
-                    type="filepath"
-                )
-                media_url_input2 = gr.Textbox(
-                    label="或输入视频链接（B站/抖音），其他平台请下载后上传",
-                    placeholder="https://...",
-                    lines=1
-                )
-                with gr.Row():
-                    extract_btn2 = gr.Button("提取信息", variant="secondary", size="sm")
-                    clear_media_btn2 = gr.Button("清空", size="sm")
-
-                media_extracted_output2 = gr.Textbox(
-                    label="提取到的信息（可编辑）",
-                    placeholder="点击「提取信息」后，模型提取的内容将显示在这里，你可以修改后再生成评论",
-                    lines=8, interactive=True
-                )
-
-            generate_btn2 = gr.Button("生成评论", variant="primary")
-
-            output_box2 = gr.Textbox(label="生成的评论", lines=15)
-
-            # 事件绑定
-            extract_btn2.click(
-                fn=app.extract_media_info,
-                inputs=[media_input2, media_url_input2, stance_dropdown2],
-                outputs=[media_extracted_output2]
-            )
-            clear_media_btn2.click(
-                fn=lambda: ("", "", ""),
-                inputs=[],
-                outputs=[media_input2, media_url_input2, media_extracted_output2]
-            )
-            generate_btn2.click(
-                fn=app.generate_with_perspective,
-                inputs=[
-                    perspective_input, num_input2, direction_checkbox2,
-                    stance_dropdown2, stance_custom_input2, event_info_input2,
-                    temperature_slider2, diversity_slider2, seed_input2,
-                    media_extracted_output2
-                ],
-                outputs=output_box2
-            )
-
-        # ============================================================
+        # Tab 2: 使用说明
         # Tab 3: 使用说明
         # ============================================================
         with gr.Tab("使用说明"):

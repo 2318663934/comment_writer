@@ -14,74 +14,61 @@ from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
 
 # ============================================================
-# Prompt 模板 — v2.0 精简版：正向引导 + 示例驱动
+# Prompt 模板 — v2.1 精简版
 # ============================================================
 
-SYSTEM_PROMPT = """你是一个真实的游戏玩家，正在网上随手发表评论。你的评论读起来完全不像AI写的。
+SYSTEM_PROMPT = """你是一个真实的游戏玩家，正在网上随手发表评论。
 
-## 表达习惯
-- 想到什么说什么，一次只盯一个点，不追求面面俱到
-- 句子可短可碎可无主语，用口语而不是书面语
-- 用陈述句表达感受，禁止使用感叹号"！"
-- 禁止"太棒了/绝了/yyds/强烈推荐/不容错过/天作之合"等夸张表达
-- 禁止"首先其次/总的来说/不过话说回来/综上所述"等书面连接词
-- 禁止"三明治"结构（先夸后批再总结）
-- 表达完核心观点立刻结束，拒绝平衡性找补话术
+## 说话方式
+- 想到什么说什么，一次只盯一个点，句子可短可碎可无主语
+- 禁止感叹号"！"、夸张表达（太棒了/绝了/yyds/强烈推荐）
+- 禁止书面连接词（首先其次/总的来说/不过话说回来）
+- 禁止三明治结构（先夸后批再总结），表达完立刻结束
+- 禁止AI式结尾："希望官方能改""不过也能理解""你们觉得怎么样"
 
-## 评论结构多样性（极其重要）
-每条评论从以下风格中随机选取，同批评论风格不能重复：
-- 纯感受："玩了几把，手感确实比上赛季好"
-- 细节碎片："模型好像小了一圈，不知道是不是错觉"
-- 自言自语："什么时候修那个bug，都好几个版本了"
-- 对比吐槽："比上次的皮肤强，上次那个真的没法看"
-- 话说一半："排队半小时进去秒退，这谁顶得住"
-- 带个人数据："刷了两三百次了，毛都没见到"
+## 评论结构多样性
+每条评论从以下风格随机选取，同批不能重复：
+纯感受 / 细节碎片 / 自言自语 / 对比吐槽 / 话说一半 / 带个人数据
 
 ## 玩家常识
-- 焦点：限时活动、版本更新内容、平衡性调整、肝度氪度、社交体验
-- 常驻活动（每日签到、常驻商店）不是讨论焦点，不要围绕它们写
-- 不编造具体数值，不围绕冷门玩法展开讨论
-- 提到游戏内容要像随口提及，不做攻略式推荐
+- 关注焦点：限时活动、版本更新、平衡调整、肝度氪度
+- 常驻活动（每日签到等）不是讨论焦点，不编造数据，不做攻略推荐
+- 约1/3评论带表情([doge][笑哭][裂开][大哭][旺柴])，位置随意
 
 ## 长度要求
-- 短评(15-40字)：必须有清晰观点，禁止"还行/凑合/一般般/感觉一般/就那样"
-- 中评(40-70字)：可略展开但不要写成小作文
-- 长评(75字+)：思维跳跃、话题可漂移、不需要完整结尾
+- 短评(15-40字)：必须观点明确，禁止"还行/凑合/一般般"
+- 中评(40-70字)、长评(75字+)：思维可跳跃、不需完整结尾
+"""
 
-## 表情符号
-约1/3评论带表情：[doge][笑哭][裂开][大哭][无语][柠檬][旺柴]
-位置随意，句中句末句首都可以。
+# 方向定义（去重）
+DIRECTION_DEFINITIONS = """**【方向定义】**
+- 正性向：赞扬、认可为主，可有小挑剔但整体正面
+- 中性向：客观陈述为主，禁止总结性评价
+- 中正性向：偏正面但克制，不如正性向热情
+"""
 
-## 禁止的AI特征
-严禁出现以下词汇或句式：
-"希望官方能改" "不过也能理解" "理性看待" "各有优劣"
-"你们觉得怎么样" "有没有一样的" "反正我是爱了"
+# JSON 输出指令（去重）
+JSON_OUTPUT_INSTRUCTION = "以JSON数组输出，只输出JSON，不要任何解释。"
+
+# 观众视角指令（去重）
+VIEWER_MODE_PROMPT = """**【重要：你的身份是刚看完这个内容的观众】**
+你刚看了上面的内容，像一个在评论区留言的人发表看法：
+- 可以针对具体画面、瞬间、细节来写
+- 提到内容要像"刚看过"一样自然（"看到XX的时候""那个镜头"），禁止用"视频中显示""根据画面"等书面语
+- 抓住值得讨论的细节来写，不要泛泛而谈
 """
 
 # 角度生成 prompt（两阶段生成的第一阶段）
 ANGLE_GENERATION_PROMPT = """针对以下话题，列出{num_angles}个不同的评论切入点（角度）。
-
-要求：
-- 每个切入点必须具体、独特，是一个明确的观察或感受
-- 不能是泛泛的分类标签
-- 好的例子："排队时间影响体验"、"新皮建模比原画好"、"零氪玩家资源跟不上"
-- 坏的例子（太泛，不可用）："游戏体验"、"皮肤评价"、"玩家感受"、"更新内容"
+每个切入点必须具体独特，不能是泛泛的类别。
+好的例子："排队时间影响体验"、"新皮建模比原画好"、"零氪玩家资源跟不上"
 {used_angles_section}
-**【话题】**
-{topic}
+**【话题】**{topic}
+**【事件背景】**{event_info}
+**【立场】**{stance}
+**【评论方向】**{directions}
 
-**【事件背景】**
-{event_info}
-
-**【立场】**
-{stance}
-
-**【评论方向】**
-{directions}
-
-请以JSON格式输出：
-{{"angles": ["切入点1", "切入点2", ...]}}
-只输出JSON，不要任何解释。"""
+{json_out}"""
 
 
 # 产品立场到知识库collection的映射
@@ -205,28 +192,18 @@ class CommentGenerator:
         stance: str,
         event_info: str = ""
     ) -> List[str]:
-        """
-        Stage 1: 生成多样化的评论切入角度
+        """Stage 1: 生成多样化的评论切入角度"""
+        context = topic if topic.strip() else (event_info[:200] if event_info else stance)
+        cache_key = topic or f"_{hash(context) & 0x7FFFFFFF:x}_"
 
-        Args:
-            topic: 话题
-            num_angles: 需要生成的角度数量（略多于评论数以确保多样性）
-            directions: 评论方向列表
-            stance: 产品立场
-            event_info: 事件背景
-
-        Returns:
-            角度列表
-        """
-        # 获取已使用过的角度
-        used_angles = self._get_used_angles(topic)
+        used_angles = self._get_used_angles(cache_key)
         used_section = ""
         if used_angles:
             used_list = "\n".join([f"- {a}" for a in list(used_angles)[:15]])
             used_section = f"\n**【已使用过的角度，请避开这些内容】**:\n{used_list}"
 
         directions_str = "、".join(directions)
-        event_text = event_info if event_info.strip() else topic
+        event_text = event_info if event_info.strip() else context
 
         prompt = ANGLE_GENERATION_PROMPT.format(
             num_angles=num_angles,
@@ -234,14 +211,15 @@ class CommentGenerator:
             event_info=event_text[:1500],
             stance=stance,
             directions=directions_str,
-            used_angles_section=used_section
+            used_angles_section=used_section,
+            json_out=JSON_OUTPUT_INSTRUCTION
         )
 
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "你是一个游戏舆情分析师，擅长从不同角度分析玩家关注点。请以JSON格式输出。"},
+                    {"role": "system", "content": "你是一个游戏舆情分析师。请以JSON格式输出。"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.6,  # 较低温度保证角度质量
@@ -291,47 +269,42 @@ class CommentGenerator:
 
     def generate_for_directions(
         self,
-        topic: str,
-        num_comments: int,
-        directions: List[str],
+        topic: str = "",
+        num_comments: int = 10,
+        directions: List[str] = None,
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
         mmr_lambda: float = 0.7,
         seed: int = 42
     ) -> List[str]:
-        """
-        两阶段生成：先定角度，再写评论
-
-        Stage 1: 生成多样化的评论切入点（角度）
-        Stage 2: 基于角度逐一生成评论，确保内容不重复
-        """
+        """两阶段生成：先定角度，再写评论。topic 为空时从 event_info 推导。"""
+        if directions is None:
+            directions = ["中性向"]
         num_comments = max(1, min(100, num_comments))
         random.seed(seed)
 
-        # ---- Stage 0: RAG 检索参考评论 ----
+        # topic 为空时从 event_info 推导
+        if not topic or not topic.strip():
+            topic = event_info[:80] if event_info else ""
+        context = topic or stance
+
+        # Stage 0: RAG 检索
         retrieved = self.rag_retriever.retrieve_for_directions(
-            topic, num_comments, directions, mmr_lambda=mmr_lambda,
+            context, num_comments, directions, mmr_lambda=mmr_lambda,
             event_info=event_info, seed=seed
         )
         reference = [r["comment"] for r in retrieved]
 
-        # ---- Stage 1: 生成评论角度 ----
-        # 生成略多于需求的角度数，确保有足够多样性
+        # Stage 1: 生成角度
         num_angles = min(num_comments + 5, num_comments * 2, 30)
         angles = self._generate_comment_angles(topic, num_angles, directions, stance, event_info)
-
         if not angles:
-            # 回退：使用自动角度（无角度引导时给LLM更多自由）
             angles = []
-            print("未生成角度，将使用自由生成模式")
 
-        # ---- Stage 2: 基于角度生成评论 ----
-        # 检索产品知识库
-        product_section = self._retrieve_product_knowledge(topic, stance, top_k=10)
-
-        # 构建prompt
-        prompt = self._build_v2_prompt(
+        # Stage 2: 生成评论
+        product_section = self._retrieve_product_knowledge(topic or stance, stance, top_k=10)
+        prompt = self._build_comment_prompt(
             topic=topic,
             num_comments=num_comments,
             directions=directions,
@@ -343,10 +316,9 @@ class CommentGenerator:
         )
 
         comments = self._call_llm(prompt, num_comments, temperature)
-
-        # 记录已使用的角度
         if angles and comments:
-            self._add_used_angles(topic, angles[:len(comments)])
+            cache_key = topic or f"_{hash(event_info) & 0x7FFFFFFF:x}_"
+            self._add_used_angles(cache_key, angles[:len(comments)])
 
         # 简单去重：过滤掉内容高度相似的评论
         comments = self._deduplicate_comments(comments)
@@ -371,7 +343,7 @@ class CommentGenerator:
     # Prompt 构建
     # ============================================================
 
-    def _build_v2_prompt(
+    def _build_comment_prompt(
         self,
         topic: str,
         num_comments: int,
@@ -380,85 +352,73 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         product_section: str = "",
-        angles: List[str] = None
+        angles: List[str] = None,
+        extra_header: str = ""
     ) -> str:
-        """构建 v2.0 精简 prompt"""
+        """构建评论生成的 user prompt（_build_v2_prompt 和 generate_with立场 共用）"""
 
         # 方向规格
+        direction_specs = []
         num_directions = len(directions)
         base_count = num_comments // num_directions
         remainder = num_comments % num_directions
-
-        direction_specs = []
         for i, d in enumerate(directions):
             count = base_count + (1 if i < remainder else 0)
             direction_specs.append(f"- {d}：生成{count}条")
-        directions_text = "\n".join(direction_specs)
 
-        # 方向定义
-        direction_defs = """**【方向定义】**
-- 正性向：赞扬、认可、推荐为主，可有小挑剔但整体正面
-- 中性向：客观陈述为主，不偏向任一方。禁止"总体不错"、"值得一试"等总结
-- 中正性向：偏正面但克制，不如正性向热情
-"""
+        # 媒体内容 → 观众视角
+        is_media = event_info and "[从媒体提取的信息]" in event_info
+        if is_media:
+            event_section = f"\n**【你刚看了一个视频/图片，以下是内容详情】**\n{event_info}\n{VIEWER_MODE_PROMPT}"
+        elif event_info.strip():
+            event_section = f"\n**【事件详细背景】**\n{event_info}"
+        else:
+            event_section = ""
 
-        # 事件背景
-        event_section = f"\n**【事件详细背景】**\n{event_info}" if event_info.strip() else ""
-
-        # 角度（Stage 1 的输出）
-        angle_section = ""
+        # 角度
         if angles:
             angle_list = "\n".join([f"{i+1}. {a}" for i, a in enumerate(angles)])
-            angle_section = f"""
-**【必须覆盖的评论切入点】**
-以下每个切入点至少生成一条评论，确保每条评论对应不同的切入点：
-{angle_list}
-
-重要：每条评论必须从一个独特的切入点出发，不同评论之间不能有相似的角度。
-"""
+            angle_section = f"\n**【必须覆盖的评论切入点】**\n{angle_list}\n\n重要：每条评论必须对应一个不同的切入点。"
         else:
-            angle_section = """
-**【内容多样性要求】**
-每条评论必须有独特的信息点和切入角度，严禁内容重复或高度相似。
-"""
+            angle_section = "\n**【内容多样性要求】**\n每条评论必须有独特的信息点和切入角度，严禁内容重复。"
 
-        # 参考评论
-        ref_samples = reference[:15] if reference else []
-        ref_text = "\n".join([f"- {c}" for c in ref_samples]) if ref_samples else "（无参考评论，请根据话题自由发挥）"
+        # 参考评论（提供 2x 生成量，让 LLM 自由选择想参考的）
+        ref_samples = reference[:num_comments * 2] if reference else []
+        ref_text = "\n".join([f"- {c}" for c in ref_samples]) if ref_samples else "（无参考评论，请自由发挥）"
+        ref_hint = "\n（以上是真实玩家评论的参考样本，只需学习其风格和用语习惯，不要抄袭内容）" if ref_samples else ""
 
-        # 长度分布计算
+        # 长度分布
         num_long = max(1, num_comments // 20)
         num_mid = num_comments // 3
         num_short = num_comments - num_long - num_mid
 
-        prompt = f"""**【话题】**
-{topic}
-
+        topic_section = f"**【话题】**\n{topic}\n" if topic and topic.strip() else ""
+        return f"""{topic_section}{extra_header}
 **【立场】**
 站在{stance}玩家的角度
 
 **【需要生成的评论】**
-{directions_text}
+{"\n".join(direction_specs)}
 共{num_comments}条
 
-{direction_defs}
+{DIRECTION_DEFINITIONS}
 
-**【长度分布要求】**
-本批{num_comments}条中：{num_short}条短评(15-40字)、{num_mid}条中评(40-70字)、{num_long}条长评(75字以上)
-短评不是水评，每条必须有清晰的实质内容。
+**【长度分布】**
+{num_short}条短评(15-40字)、{num_mid}条中评(40-70字)、{num_long}条长评(75字+)
 {event_section}
 {product_section if product_section else ""}
 {angle_section}
 
-**【参考评论（仅学习风格，不抄袭内容）】**
-{ref_text}
+**【参考评论（仅学习风格）】**
+{ref_text}{ref_hint}
 
 **【输出格式】**
-以JSON数组输出{num_comments}条评论，每条标注方向：
-{{"comments": [{{"content": "评论内容", "direction": "正性向"}}, ...]}}
-只输出JSON。"""
+{{"comments": [{{"content": "...", "direction": "正性向"}}, ...]}}
+{JSON_OUTPUT_INSTRUCTION}"""
 
-        return prompt
+    def _build_v2_prompt(self, **kwargs):
+        """兼容旧接口"""
+        return self._build_comment_prompt(**kwargs)
 
     def _build_prompt(
         self,
@@ -559,8 +519,8 @@ class CommentGenerator:
 
     def generate_with立场(
         self,
-        topic: str,
-        perspective: str,
+        topic: str = "",
+        perspective: str = "",
         num_comments: int = 5,
         direction: str = "中性向",
         stance: str = "王者荣耀",
@@ -570,9 +530,10 @@ class CommentGenerator:
         seed: int = 42
     ) -> List[str]:
         """
-        生成带有特定视角的评论（v2.0 两阶段生成）
+        生成带有特定视角的评论 — 复用 _build_comment_prompt
         """
-        search_topic = f"{topic} {perspective} {stance}"
+        context = topic if topic and topic.strip() else (event_info[:80] if event_info else stance)
+        search_topic = f"{context} {perspective} {stance}"
 
         # Stage 0: RAG 检索
         retrieved = self.rag_retriever.retrieve_for_directions(
@@ -581,59 +542,27 @@ class CommentGenerator:
         )
         reference = [r["comment"] for r in retrieved]
 
-        # Stage 1: 生成角度（带视角标记）
+        # Stage 1: 生成角度
         angles = self._generate_comment_angles(
-            topic=f"{topic}（从{perspective}视角）",
+            topic=f"{context}（从{perspective}视角）",
             num_angles=min(num_comments + 3, 15),
             directions=[direction],
             stance=stance,
             event_info=event_info
         )
 
-        # 产品知识库
-        product_section = self._retrieve_product_knowledge(topic, stance)
-
-        # Stage 2: 构建 prompt 并生成
-        angle_section = ""
-        if angles:
-            angle_list = "\n".join([f"{i+1}. {a}" for i, a in enumerate(angles)])
-            angle_section = f"\n**【必须覆盖的切入点】**\n{angle_list}"
-
-        ref_text = "\n".join([f"- {c}" for c in reference[:10]])
-
-        event_text = f"\n**【事件背景】**\n{event_info}" if event_info.strip() else ""
-
-        num_long = max(1, num_comments // 10)
-        num_mid = num_comments // 3
-        num_short = num_comments - num_long - num_mid
-
-        prompt = f"""**【话题】**
-{topic}
-
-**【模拟视角】**
-从"{perspective}"的视角发表评论
-
-**【立场】**
-始终站在{stance}的立场
-
-**【评论方向】**
-{direction}
-
-方向定义：{"赞扬、认可、推荐为主" if direction == "正性向" else ("客观陈述为主，禁止总结性评价" if direction == "中性向" else "偏正面但克制，不热情")}
-
-**【长度分布】**
-{num_short}条短评(15-40字)、{num_mid}条中评(40-70字)、{num_long}条长评(75字+)
-{event_text}
-{product_section if product_section else ""}
-{angle_section}
-
-**【参考评论风格】**
-{ref_text}
-
-**【输出格式】**
-以JSON数组输出{num_comments}条评论：
-{{"comments": ["评论1", "评论2", ...]}}
-只输出JSON。"""
+        # Stage 2: 复用公共 prompt 构建
+        prompt = self._build_comment_prompt(
+            topic=topic,
+            num_comments=num_comments,
+            directions=[direction],
+            reference=reference,
+            stance=stance,
+            event_info=event_info,
+            product_section=self._retrieve_product_knowledge(topic, stance),
+            angles=angles,
+            extra_header=f'\n**【模拟视角】**\n从"{perspective}"的视角发表评论\n'
+        )
 
         return self._call_llm(prompt, num_comments, temperature)
 

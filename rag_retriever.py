@@ -184,7 +184,7 @@ class RAGRetriever:
         random.seed(seed)
 
         # 根据生成数量调整检索数量，确保每方向有足够参考
-        retrieval_count = max(TOP_K, num_comments * len(directions) * 3)
+        retrieval_count = max(TOP_K, num_comments * 2)
 
         # 生成多个查询变体（从事件背景中自适应提取）
         query_variants = self._generate_query_variants(topic, directions, event_info)
@@ -279,18 +279,12 @@ class RAGRetriever:
         return keywords[:8]
 
     def _generate_query_variants(self, topic: str, directions: List[str], event_info: str = "") -> List[str]:
-        """
-        生成多个查询变体，从事件背景中自适应提取关键词
-
-        Args:
-            topic: 原始话题
-            directions: 评论方向列表
-            event_info: 事件背景文本
-
-        Returns:
-            查询变体列表
-        """
+        """生成多个查询变体，topic 为空时从 event_info 推导"""
         import random
+
+        # topic 为空时从 event_info 推导
+        if not topic or not topic.strip():
+            topic = event_info[:100] if event_info else "游戏"
 
         # 合并方向关键词
         direction_keywords = {

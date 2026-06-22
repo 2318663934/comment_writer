@@ -3,6 +3,7 @@ LLM评论生成模块 - 基于RAG检索结果生成评论
 v2.0: 简化prompt、两阶段生成(角度→评论)、玩家行为常识
 """
 import os
+import sys
 import json
 import re
 import time
@@ -47,6 +48,33 @@ SYSTEM_PROMPT = """你是一个真实的游戏玩家，正在网上随手发表�
 ## 长度要求
 - 短评(15-40字)：必须观点明确，禁止"还行/凑合/一般般"
 - 中评(40-70字)、长评(75字+)：思维可跳跃、不需完整结尾
+"""
+
+ANIME_SYSTEM_PROMPT = """你是一个B站/二次元社区的真实用户，正在随手发表评论。
+
+## 说话方式
+- 想到什么说什么，语气轻松随意，像弹幕一样自然
+- 可以用少量感叹号（不超过1个），但禁止连用（！！）
+- 禁止书面连接词（首先其次/总的来说），表达完立刻结束
+- 禁止三明治结构和AI式总结结尾
+- 可以带点傲娇、吐槽、内心戏，像和朋友聊天一样
+
+## 二次元/B站评论特色
+- 大量使用B站表情：[doge][笑哭][脱单doge][星星眼][打call][哦呼][傲娇][辣眼睛][妙啊][热][藏狐][灵魂出窍]
+- 可以用简单的颜文字：www、QAQ、qwq、_(:3」∠)_
+- 可以出现ACGN圈内梗和用语：厨力、双厨狂喜、好耶、绝绝子（少量使用）
+- 可以有弹幕式短评：纯感叹、刷梗、跟队形
+- 部分评论可以只是玩梗、吐槽、或者纯情绪表达，不需要"有观点"
+
+## 评论结构多样性
+每条评论随机从以下风格选取：
+弹幕式短评 / 吐槽玩梗 / 内心戏 / 厨力发言 / 围观路人 / 假正经分析 / 真香现场 / 社死分享
+
+## 长度与格式
+- 短评(15-40字)：弹幕式，观点或情绪快速到位
+- 中评(40-70字)：带一个梗或细节展开
+- 长评(75字+)：思维可跳跃，像在和朋友聊
+- 约1/2评论带B站表情，位置随意，不堆砌
 """
 
 # 方向定义（去重）
@@ -118,20 +146,22 @@ STANCE_TO_PRODUCT_COLLECTION = {
 
 
 class CommentGenerator:
-    """评论生成器 v2.0"""
+    """评论生成器 v2.2"""
 
     def __init__(
         self,
         rag_retriever: RAGRetriever = None,
         api_key: str = None,
         base_url: str = None,
-        model: str = None
+        model: str = None,
+        style: str = "王者荣耀"
     ):
         self.rag_retriever = rag_retriever or RAGRetriever()
 
         self.api_key = api_key or LLM_API_KEY or os.getenv("OPENAI_API_KEY", "")
         self.base_url = base_url or LLM_BASE_URL
         self.model = model or LLM_MODEL
+        self.style = style  # 当前评论风格
 
         if not self.api_key:
             print("警告: 未设置OPENAI_API_KEY，将无法生成评论")
@@ -148,11 +178,64 @@ class CommentGenerator:
     # ============================================================
 
     def _retrieve_product_knowledge(self, topic: str, stance: str, top_k: int = 10) -> str:
-        """检索产品知识库并返回格式化背景信息"""
+        """检索产品知识库并返回格式化背景信息
+
+        三种模式 (由 config.KNOWLEDGE_MODE 控制):
+          - "rag":    纯 Milvus RAG (原行为)
+          - "wiki":   纯 LLM-Wiki (deepsearch 项目)
+          - "hybrid": Wiki 优先, 失败降级 RAG (推荐)
+        """
         collection = STANCE_TO_PRODUCT_COLLECTION.get(stance)
         if collection is None:
             return ""
 
+        # 读知识库模式 (延迟 import config 避免循环)
+        try:
+            from config import KNOWLEDGE_MODE
+        except Exception:
+            KNOWLEDGE_MODE = "rag"
+
+        if KNOWLEDGE_MODE == "wiki":
+            return self._retrieve_product_knowledge_wiki(topic, stance, collection, top_k)
+        elif KNOWLEDGE_MODE == "hybrid":
+            result = self._retrieve_product_knowledge_wiki(topic, stance, collection, top_k)
+            if result:
+                return result
+            # Wiki 失败降级 RAG
+            print(f"  [Wiki 检索失败, 降级到 RAG]")
+            return self._retrieve_product_knowledge_rag(topic, stance, collection, top_k)
+        else:
+            return self._retrieve_product_knowledge_rag(topic, stance, collection, top_k)
+
+    def _retrieve_product_knowledge_wiki(
+        self, topic: str, stance: str, collection: str, top_k: int
+    ) -> str:
+        """通过 LLM-Wiki (deepsearch) 检索产品信息"""
+        try:
+            from pathlib import Path
+            wiki_path = Path(__file__).resolve().parent.parent / "deepsearch"
+            if str(wiki_path) not in sys.path:
+                sys.path.insert(0, str(wiki_path))
+
+            from wiki_product_backend import search as kb_search
+            # collection 是 Milvus 名字 (lok_world / jcjz 等), WikiBackend 会自动转
+            results = kb_search(topic, product=stance, top_k=top_k)
+            if not results:
+                return ""
+
+            lines = [f"\n\n**【产品相关背景】**\n以下是关于{stance}的近期相关报道 (LLM-Wiki 检索):"]
+            for i, r in enumerate(results, 1):
+                lines.append(f"{i}. {r['title']} - 来源: {r.get('source', 'wiki')}")
+                lines.append(f"   {r['content_text'][:300]}...")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"  [Wiki 检索异常] {e}")
+            return ""
+
+    def _retrieve_product_knowledge_rag(
+        self, topic: str, stance: str, collection: str, top_k: int
+    ) -> str:
+        """通过 Milvus (原 E:/产品信息知识库) 检索产品信息"""
         try:
             import sys
             from pathlib import Path
@@ -168,7 +251,7 @@ class CommentGenerator:
             if not results:
                 return ""
 
-            # 按话题热度排序：限时/新上内容优先
+            # 按话题热度排序
             hot_keywords = ["限时", "新上", "首周", "限定", "新版本", "登场", "爆料", "上线"]
             def hotness(r):
                 score = 0
@@ -176,17 +259,17 @@ class CommentGenerator:
                 for kw in hot_keywords:
                     if kw in text:
                         score += 1
-                return -score  # 负分让热度高的排在前面
+                return -score
 
             results = sorted(results, key=hotness)
 
-            lines = [f"\n\n**【产品相关背景】**\n以下是关于{stance}的近期相关报道："]
+            lines = [f"\n\n**【产品相关背景】**\n以下是关于{stance}的近期相关报道 (Milvus RAG):"]
             for i, r in enumerate(results, 1):
                 lines.append(f"{i}. {r['title']} - 来源: {r['source']}")
                 lines.append(f"   {r['content_text'][:300]}...")
             return "\n".join(lines)
         except Exception as e:
-            print(f"产品知识库检索失败: {e}")
+            print(f"  [RAG 检索异常] {e}")
             return ""
 
     # ============================================================
@@ -349,10 +432,11 @@ class CommentGenerator:
         num_comments: int = 10,
         direction: str = "中性向",
         stance: str = "王者荣耀",
-        event_info: str = ""
+        event_info: str = "",
+        style: str = None
     ) -> List[str]:
         """生成评论（单方向便捷方法）"""
-        return self.generate_for_directions(topic, num_comments, [direction], stance, event_info)
+        return self.generate_for_directions(topic, num_comments, [direction], stance, event_info, style=style)
 
     def generate_for_directions(
         self,
@@ -363,12 +447,22 @@ class CommentGenerator:
         event_info: str = "",
         temperature: float = 0.8,
         use_rag: bool = True,
-        use_kb: bool = True
+        use_kb: bool = True,
+        cancel_event: 'threading.Event' = None,
+        style: str = None
     ) -> List[str]:
         """两阶段生成：先定角度，再写评论。topic 为空时从 event_info 推导。"""
         if directions is None:
             directions = ["中性向"]
         num_comments = max(1, min(100, num_comments))
+
+        # 风格切换：更新 retriever 集合和当前 style
+        if style and style != self.style:
+            self.style = style
+            from config import STYLE_CONFIG
+            col = STYLE_CONFIG.get(style, {}).get("collection", "wangzhe_comments")
+            if self.rag_retriever:
+                self.rag_retriever.switch_collection(col)
 
         # topic 为空时从 event_info 推导
         if not topic or not topic.strip():
@@ -384,6 +478,10 @@ class CommentGenerator:
             reference = [r["comment"] for r in retrieved]
         else:
             reference = []
+
+        # 中断检查
+        if cancel_event and cancel_event.is_set():
+            return ["[任务已被新请求中断]"]
 
         # Stage 1: 生成角度
         num_angles = min(num_comments + 5, num_comments * 2, 30)
@@ -414,6 +512,10 @@ class CommentGenerator:
             angles=angles,
             brainstorm=brainstorm
         )
+
+        # 中断检查
+        if cancel_event and cancel_event.is_set():
+            return ["[任务已被新请求中断]"]
 
         comments = self._call_llm(prompt, num_comments, temperature)
         if angles and comments:
@@ -510,7 +612,15 @@ class CommentGenerator:
         num_short = num_comments - num_long - num_mid
 
         topic_section = f"**【话题】**\n{topic}\n" if topic and topic.strip() else ""
+        style_hint = ""
+        if self.style == "二次元":
+            style_hint = (
+                "\n**【风格要求：二次元/B站社区风】**\n"
+                "写评论时模仿B站社区用户的语气：自由松散、多用B站表情([doge][笑哭][脱单doge]等)、"
+                "可以玩梗吐槽、弹幕式表达。但不要强行凹二次元人设，自然就好。\n"
+            )
         return f"""{topic_section}{extra_header}
+{style_hint}
 **【立场】**
 站在{stance}玩家的角度
 
@@ -563,11 +673,12 @@ class CommentGenerator:
 
     def _call_llm(self, prompt: str, num_comments: int, temperature: float = 0.85) -> List[str]:
         """调用LLM生成评论"""
+        system_prompt = ANIME_SYSTEM_PROMPT if self.style == "二次元" else SYSTEM_PROMPT
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=temperature,
@@ -642,11 +753,19 @@ class CommentGenerator:
         stance: str = "王者荣耀",
         event_info: str = "",
         temperature: float = 0.8,
-        seed: int = 42
+        seed: int = 42,
+        style: str = None
     ) -> List[str]:
         """
         生成带有特定视角的评论 — 复用 _build_comment_prompt
         """
+        # 风格切换
+        if style and style != self.style:
+            self.style = style
+            from config import STYLE_CONFIG
+            col = STYLE_CONFIG.get(style, {}).get("collection", "wangzhe_comments")
+            if self.rag_retriever:
+                self.rag_retriever.switch_collection(col)
         context = topic if topic and topic.strip() else (event_info[:80] if event_info else stance)
         search_topic = f"{context} {perspective} {stance}"
 

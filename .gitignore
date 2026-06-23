@@ -5,6 +5,15 @@ __pycache__/
 *.egg-info/
 *.egg
 
+# ⚠️ 密钥 (从 v2.3 起, .env 不再入仓, 已在历史中的密钥请轮换!)
+.env
+.env.local
+.env.*.local
+
+# .env.example 模板仍可入仓作为参考
+!.env.example
+!.env.wiki.template
+
 # Virtual environment
 commenter/
 

@@ -16,12 +16,13 @@ from config import (
 
 
 class VectorStore:
-    """Milvus向量数据库操作类"""
+    """Milvus向量数据库操作类（支持多集合）"""
 
-    def __init__(self, host: str = MILVUS_HOST, port: int = MILVUS_PORT):
+    def __init__(self, host: str = MILVUS_HOST, port: int = MILVUS_PORT,
+                 collection_name: str = None):
         self.host = host
         self.port = port
-        self.collection_name = COLLECTION_NAME
+        self.collection_name = collection_name or COLLECTION_NAME
         self.embedding_model = None
         self._connect()
 
@@ -58,9 +59,10 @@ class VectorStore:
                 return
 
         # 定义集合schema
+        # max_length 按字节计，中文每个字符约3字节，3000字节≈1000个中文字
         fields = [
             FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-            FieldSchema(name="comment", dtype=DataType.VARCHAR, max_length=1000),
+            FieldSchema(name="comment", dtype=DataType.VARCHAR, max_length=3000),
             FieldSchema(name="engagement", dtype=DataType.FLOAT),
             FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
         ]
@@ -104,11 +106,17 @@ class VectorStore:
         Args:
             comments: List of (comment_text, engagement) tuples
         """
+        from config import MAX_COMMENT_LEN
         collection = Collection(self.collection_name)
 
-        # 分离评论和互动量
-        comment_texts = [c[0] for c in comments]
-        engagements = [c[1] for c in comments]
+        # 分离评论和互动量，同时截断过长评论
+        comment_texts = []
+        engagements = []
+        for c, e in comments:
+            if len(c) > MAX_COMMENT_LEN:
+                c = c[:MAX_COMMENT_LEN]
+            comment_texts.append(c)
+            engagements.append(e)
 
         # 生成向量
         embeddings = self.embed_comments(comment_texts)
@@ -263,10 +271,14 @@ class VectorStore:
 
         return search_results
 
+    def switch_collection(self, collection_name: str):
+        """切换到指定的集合"""
+        self.collection_name = collection_name
+
     def get_collection_stats(self) -> Dict[str, Any]:
-        """获取集合统计信息"""
+        """获取当前集合统计信息"""
         if not utility.has_collection(self.collection_name):
-            return {"exists": False}
+            return {"exists": False, "name": self.collection_name}
 
         collection = Collection(self.collection_name)
         stats = collection.num_entities
@@ -275,6 +287,35 @@ class VectorStore:
             "name": self.collection_name,
             "entities": stats
         }
+
+    @staticmethod
+    def get_available_collections() -> list:
+        """列出所有可用的评论集合"""
+        from config import STYLE_CONFIG
+        # 确保连接存在
+        from pymilvus import connections as _conns
+        try:
+            if "default" not in [alias for alias, _ in _conns.list_connections()]:
+                _conns.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+        except Exception:
+            try:
+                _conns.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+            except Exception:
+                return []
+        available = []
+        for style_name, cfg in STYLE_CONFIG.items():
+            col_name = cfg["collection"]
+            try:
+                if utility.has_collection(col_name):
+                    collection = Collection(col_name)
+                    available.append({
+                        "style": style_name,
+                        "collection": col_name,
+                        "entities": collection.num_entities,
+                    })
+            except Exception:
+                continue
+        return available
 
     def close(self):
         """关闭连接"""

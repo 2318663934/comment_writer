@@ -17,10 +17,14 @@ class RAGRetriever:
     _recent_generation_count: Dict[str, int] = {}  # 记录连续生成次数
     _last_generation_time: Dict[str, float] = {}  # 上次生成时间
 
-    def __init__(self, vector_store: VectorStore = None):
-        self.vector_store = vector_store or VectorStore()
+    def __init__(self, vector_store: VectorStore = None, collection_name: str = None):
+        self.vector_store = vector_store or VectorStore(collection_name=collection_name)
         self._session_id = str(id(self))
         self._last_access = time.time()
+
+    def switch_collection(self, collection_name: str):
+        """切换到指定评论风格集合"""
+        self.vector_store.switch_collection(collection_name)
 
     def _get_recent_chunk_ids(self) -> tuple:
         """

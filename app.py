@@ -4,10 +4,12 @@ Gradio Web界面 - 评论写手系统
 import sys
 sys.path.insert(0, "e:/评论写手")
 
+import threading
 import gradio as gr
 from rag_retriever import RAGRetriever
 from comment_generator import CommentGenerator
 from vector_store import VectorStore
+from config import STYLE_CONFIG, DEFAULT_STYLE
 from multimodal_extractor import create_extractor
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -28,6 +30,7 @@ class CommentWriterApp:
         self.rag_retriever = None
         self.generator = None
         self.extractor = None
+        self._cancel_flag = threading.Event()
         self._init_components()
 
     def _init_components(self):
@@ -62,11 +65,17 @@ class CommentWriterApp:
         stance: 产品立场，用于过滤无关内容
         """
         if not self.extractor:
-            return ("【错误】Ollama 多模态未启用。\n"
+            return ("【错误】智谱多模态未启用。\n"
                     "请在 .env 中设置 OLLAMA_ENABLED=true 并重启服务。")
 
         if not media_path and not (video_url and video_url.strip()):
             return ""
+
+        # 取消上一个正在运行的任务
+        self._cancel_flag.set()
+        import time as _time
+        _time.sleep(0.3)
+        self._cancel_flag.clear()
 
         is_weibo = video_url and ('weibo.com' in video_url or 'weibo.cn' in video_url or 't.cn' in video_url)
         is_douyin = video_url and 'douyin.com' in video_url
@@ -75,7 +84,8 @@ class CommentWriterApp:
             result = self.extractor.extract(
                 media_path=media_path if media_path else None,
                 video_url=video_url.strip() if video_url else None,
-                focus=stance if stance and stance != "其他" else ""
+                focus=stance if stance and stance != "其他" else "",
+                cancel_event=self._cancel_flag
             )
             if result:
                 print(f"[媒体提取] 成功，{len(result)} 字")
@@ -115,6 +125,11 @@ class CommentWriterApp:
             parts.append(f"[用户提供的事件背景]\n{event_info.strip()}")
         return "\n\n".join(parts)
 
+    def cancel_generation(self) -> str:
+        """取消当前正在运行的生成任务"""
+        self._cancel_flag.set()
+        return "已取消上一个任务"
+
     def generate_comments(
         self,
         num_comments: int,
@@ -124,11 +139,18 @@ class CommentWriterApp:
         temperature: float = 0.8,
         media_extracted_text: str = "",
         use_rag: bool = True,
-        use_kb: bool = True
+        use_kb: bool = True,
+        style: str = "王者荣耀"
     ) -> str:
         """生成评论"""
         if not self.is_ready():
             return "系统未就绪，请确保已运行 build_database.py 构建数据库"
+
+        # 取消上一个正在运行的任务
+        self._cancel_flag.set()
+        import time as _time
+        _time.sleep(0.3)  # 让上一个任务有时间检测到取消信号
+        self._cancel_flag.clear()
 
         # 合并媒体提取内容到事件背景
         merged_event = self._merge_media_context(media_extracted_text, event_info)
@@ -142,7 +164,9 @@ class CommentWriterApp:
                 event_info=merged_event.strip() if merged_event else "",
                 temperature=temperature,
                 use_rag=use_rag,
-                use_kb=use_kb
+                use_kb=use_kb,
+                cancel_event=self._cancel_flag,
+                style=style
             )
 
             if not all_comments:
@@ -165,7 +189,8 @@ class CommentWriterApp:
         stance: str,
         event_info: str,
         temperature: float = 0.8,
-        media_extracted_text: str = ""
+        media_extracted_text: str = "",
+        style: str = "王者荣耀"
     ) -> str:
         """带视角生成评论"""
         if not self.is_ready():
@@ -195,7 +220,8 @@ class CommentWriterApp:
                     direction=direction,
                     stance=stance,
                     event_info=merged_event.strip() if merged_event else "",
-                    temperature=temperature
+                    temperature=temperature,
+                    style=style
                 )
 
                 if comments:
@@ -219,15 +245,17 @@ class CommentWriterApp:
             return "❌ 未连接到Milvus"
 
         try:
-            stats = self.vector_store.get_collection_stats()
-            if stats.get("exists"):
-                entities = stats.get("entities", 0)
-                extra = ""
-                if self.extractor:
-                    extra += " | Ollama 多模态已连接"
-                return f"✅ 就绪 - 数据库包含 {entities} 条评论{extra}"
-            else:
-                return "❌ 数据库集合不存在"
+            available = VectorStore.get_available_collections()
+            if not available:
+                return "❌ 没有可用的评论数据库"
+
+            parts = []
+            for info in available:
+                parts.append(f"{info['style']}({info['entities']}条)")
+            extra = ""
+            if self.extractor:
+                extra += " | 智谱多模态已连接"
+            return f"✅ 就绪 - {' | '.join(parts)}{extra}"
         except Exception as e:
             return f"❌ 连接错误: {str(e)}"
 
@@ -237,9 +265,41 @@ def create_app() -> gr.Blocks:
 
     app = CommentWriterApp()
 
+    theme = gr.themes.Base(
+        primary_hue=gr.themes.colors.teal,
+        secondary_hue=gr.themes.colors.teal,
+        neutral_hue=gr.themes.colors.slate,
+        radius_size=gr.themes.sizes.radius_lg,
+    ).set(
+        body_background_fill="*neutral_50",
+        block_background_fill="white",
+        input_background_fill="white",
+        button_primary_background_fill="*primary_500",
+        button_primary_background_fill_hover="*primary_600",
+        button_secondary_background_fill="*neutral_100",
+        button_secondary_background_fill_hover="*neutral_200",
+        slider_color="*primary_500",
+        checkbox_background_color_selected="*primary_500",
+        block_border_color="*neutral_200",
+        block_border_width="1px",
+        border_color_primary="*primary_300",
+    )
+
     with gr.Blocks(title="评论写手") as demo:
-        gr.Markdown("# 评论写手系统")
-        gr.Markdown("基于LLM和RAG的智能评论生成系统")
+        gr.HTML("""<style>
+        :root {
+            --primary-100: #ccfbf1; --primary-200: #99f6e4; --primary-300: #5eead4;
+            --primary-400: #2dd4bf; --primary-500: #14b8a6 !important; --primary-600: #0d9488;
+            --neutral-50: #f8fafc; --neutral-100: #f1f5f9; --neutral-200: #e2e8f0;
+        }
+        </style>""")
+        gr.Markdown(
+            """<h1 style="font-weight: 800; font-size: 2rem; margin-bottom: 0.25rem;">
+            <span style="background: linear-gradient(135deg, #14b8a6, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            AI 评论写手
+            </span></h1>
+            <p style="color: #64748b; font-size: 15px; margin-top: 0;">基于 LLM + RAG 的智能评论生成系统</p>"""
+        )
 
         # 状态显示
         status = app.get_status()
@@ -271,6 +331,11 @@ def create_app() -> gr.Blocks:
                 value="王者荣耀", label="产品选择",
                 allow_custom_value=True,
             )
+            style_dropdown = gr.Dropdown(
+                choices=list(STYLE_CONFIG.keys()),
+                value=DEFAULT_STYLE, label="评论风格",
+                info="选择评论的语气和风格",
+            )
 
             event_info_input = gr.Textbox(
                 label="事件背景（可选）",
@@ -278,7 +343,7 @@ def create_app() -> gr.Blocks:
                 lines=5
             )
 
-            with gr.Accordion("图片/视频辅助（可选，需 Ollama）", open=False):
+            with gr.Accordion("图片/视频辅助（可选，需智谱）", open=False):
                 gr.Markdown("上传图片/视频文件，或粘贴视频链接，点击「提取信息」后审核编辑")
                 media_input = gr.File(
                     label="上传图片或视频（文件）",
@@ -304,7 +369,9 @@ def create_app() -> gr.Blocks:
                 use_rag_checkbox = gr.Checkbox(label="使用参考评论数据库", value=True)
                 use_kb_checkbox = gr.Checkbox(label="使用产品信息库", value=True)
 
-            generate_btn = gr.Button("生成评论", variant="primary")
+            with gr.Row():
+                generate_btn = gr.Button("生成评论", variant="primary")
+                cancel_btn = gr.Button("中断任务", variant="secondary")
 
             output_box = gr.Textbox(label="生成的评论", lines=15)
 
@@ -312,7 +379,8 @@ def create_app() -> gr.Blocks:
             extract_btn.click(
                 fn=app.extract_media_info,
                 inputs=[media_input, media_url_input, stance_dropdown],
-                outputs=[media_extracted_output]
+                outputs=[media_extracted_output],
+                concurrency_limit=None
             )
             clear_media_btn.click(
                 fn=lambda: ("", "", ""),
@@ -326,13 +394,19 @@ def create_app() -> gr.Blocks:
                     stance_dropdown, event_info_input,
                     temperature_slider,
                     media_extracted_output,
-                    use_rag_checkbox, use_kb_checkbox
+                    use_rag_checkbox, use_kb_checkbox,
+                    style_dropdown
                 ],
-                outputs=output_box
+                outputs=output_box,
+                concurrency_limit=None
+            )
+            cancel_btn.click(
+                fn=app.cancel_generation,
+                inputs=[],
+                outputs=[]
             )
         # ============================================================
         # Tab 2: 使用说明
-        # Tab 3: 使用说明
         # ============================================================
         with gr.Tab("使用说明"):
             gr.Markdown("""
@@ -369,7 +443,7 @@ LLM_MODEL=gpt-4o-mini
 - **中性向**: 客观分析、理性评价
 - **中正性向**: 中立但偏正面
 
-### 6. 图片/视频辅助（需 Ollama）
+### 6. 图片/视频辅助（需智谱）
 1. 展开"图片/视频辅助"折叠区
 2. 上传游戏截图或视频文件
 3. 点击「提取信息」——系统通过多模态模型提取关键事件信息
@@ -387,6 +461,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False,
-        theme=gr.themes.Soft()
+        share=False
     )

@@ -1,6 +1,6 @@
 """
 多模态信息提取模块
-支持图片/视频输入，通过 Ollama qwen3.5 多模态模型提取关键信息
+支持图片/视频输入，通过智谱 GLM-4.6V-Flash 多模态模型提取关键信息
 视频处理：faster-whisper 语音转录（主线）+ 场景切换抽帧（辅线）
 """
 import os
@@ -30,7 +30,7 @@ def _check_uc():
             _uc_available = False
     return _uc_available
 
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_ENABLED, WHISPER_MODEL
+from config import ZHIPU_API_KEY, ZHIPU_BASE_URL, ZHIPU_MODEL, ZHIPU_ENABLED, WHISPER_MODEL
 
 
 # ============================================================
@@ -96,42 +96,44 @@ class MultimodalExtractor:
 
     def __init__(
         self,
+        api_key: str = None,
         base_url: str = None,
         model: str = None,
         whisper_model: str = None
     ):
-        self.base_url = base_url or OLLAMA_BASE_URL
-        self.model = model or OLLAMA_MODEL
+        self.api_key = api_key or ZHIPU_API_KEY
+        self.base_url = base_url or ZHIPU_BASE_URL
+        self.model = model or ZHIPU_MODEL
         self.whisper_model_size = whisper_model or WHISPER_MODEL
-        self._whisper = None  # 延迟加载
+        self._whisper = None
+        self._vision_client = None
 
     # ============================================================
     # 统一入口
     # ============================================================
 
-    def extract(self, media_path: str = None, video_url: str = None, focus: str = "") -> str:
+    def extract(self, media_path: str = None, video_url: str = None, focus: str = "", cancel_event=None) -> str:
         """
         统一提取入口：支持本地文件路径和视频 URL
-
-        Args:
-            media_path: 本地图片/视频文件路径
-            video_url: 视频链接
-            focus: 产品关注点（如"王者荣耀"），用于过滤无关内容
-
-        Returns:
-            提取的文本描述
         """
         self._focus = focus
+
+        def _cancelled():
+            return cancel_event and cancel_event.is_set()
+
         # 优先处理 URL
         if video_url and video_url.strip():
             result = self._download_video(video_url.strip())
             if not result:
                 return ""
-            # 如果返回值看起来不像文件路径，就是已提取好的文本（如笔记）
+            if _cancelled():
+                return "[任务已被新请求中断]"
             if not os.path.exists(result):
                 return result
             try:
                 print(f"[MultimodalExtractor] 下载完成，开始处理: {result}")
+                if _cancelled():
+                    return "[任务已被新请求中断]"
                 return self._extract_from_video(result)
             finally:
                 self._cleanup_temp(result)
@@ -1338,15 +1340,13 @@ class MultimodalExtractor:
 请用简洁的中文列出，每条一行。"""
 
         try:
-            url = f"{self.base_url.rstrip('/')}/api/chat"
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False
-            }
-            resp = requests.post(url, json=payload, timeout=60)
-            resp.raise_for_status()
-            return resp.json().get("message", {}).get("content", "").strip()
+            client = self._get_vision_client()
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=60,
+            )
+            return response.choices[0].message.content.strip()
         except Exception as e:
             print(f"[MultimodalExtractor] 转录摘要失败: {e}")
             return f"视频语音内容摘要：\n{transcript[:1500]}"
@@ -1545,8 +1545,15 @@ class MultimodalExtractor:
             gc.collect()
 
     # ============================================================
-    # Ollama API 调用
+    # 智谱视觉 API 调用（OpenAI 兼容格式）
     # ============================================================
+
+    def _get_vision_client(self):
+        """延迟初始化 OpenAI 客户端（指向智谱 API）"""
+        if self._vision_client is None:
+            from openai import OpenAI
+            self._vision_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._vision_client
 
     def _call_ollama_vision(
         self,
@@ -1555,7 +1562,7 @@ class MultimodalExtractor:
         timeout: int = 120
     ) -> str:
         """
-        调用 Ollama 多模态 API
+        调用智谱 GLM-4.6V-Flash 多模态 API（OpenAI 兼容格式）
 
         Args:
             prompt: 文本 prompt
@@ -1565,39 +1572,30 @@ class MultimodalExtractor:
         Returns:
             模型响应文本
         """
-        url = f"{self.base_url.rstrip('/')}/api/chat"
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": image_base64_list
-                }
-            ],
-            "stream": False
-        }
+        # 构建 OpenAI vision 格式的 content 数组
+        content = [{"type": "text", "text": prompt}]
+        for img_b64 in image_base64_list:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+            })
 
         try:
-            print(f"[MultimodalExtractor] 调用 Ollama: {self.model}, "
+            print(f"[MultimodalExtractor] 调用智谱视觉: {self.model}, "
                   f"{len(image_base64_list)} 张图片, prompt {len(prompt)} 字")
             t0 = time.time()
-            resp = requests.post(url, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            result = data.get("message", {}).get("content", "")
+            client = self._get_vision_client()
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": content}],
+                timeout=timeout,
+            )
+            result = response.choices[0].message.content or ""
             elapsed = time.time() - t0
-            print(f"[MultimodalExtractor] Ollama 响应: {len(result)} 字, 耗时 {elapsed:.1f}s")
+            print(f"[MultimodalExtractor] 智谱响应: {len(result)} 字, 耗时 {elapsed:.1f}s")
             return result.strip()
-        except requests.exceptions.Timeout:
-            print(f"[MultimodalExtractor] Ollama 调用超时 ({timeout}s)")
-            return ""
-        except requests.exceptions.ConnectionError:
-            print(f"[MultimodalExtractor] 无法连接到 Ollama: {self.base_url}")
-            return ""
         except Exception as e:
-            print(f"[MultimodalExtractor] Ollama 调用失败: {e}")
+            print(f"[MultimodalExtractor] 智谱视觉调用失败: {e}")
             return ""
 
     # ============================================================
@@ -1631,24 +1629,17 @@ class MultimodalExtractor:
 # ============================================================
 
 def create_extractor() -> Optional[MultimodalExtractor]:
-    """创建提取器（检查 Ollama 是否可用）"""
-    if not OLLAMA_ENABLED:
-        print("[MultimodalExtractor] OLLAMA_ENABLED=false，跳过初始化")
+    """创建提取器（检查智谱 API 是否可用）"""
+    if not ZHIPU_ENABLED:
+        print("[MultimodalExtractor] ZHIPU_ENABLED=false，跳过初始化")
         return None
 
-    try:
-        # 快速检查 Ollama 是否可达
-        url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            print(f"[MultimodalExtractor] Ollama 连接成功: {OLLAMA_BASE_URL}")
-            return MultimodalExtractor()
-        else:
-            print(f"[MultimodalExtractor] Ollama 响应异常: {resp.status_code}")
-            return None
-    except Exception as e:
-        print(f"[MultimodalExtractor] Ollama 不可用: {e}")
+    if not ZHIPU_API_KEY:
+        print("[MultimodalExtractor] ZHIPU_API_KEY 未设置，跳过初始化")
         return None
+
+    print(f"[MultimodalExtractor] 智谱 API 已配置: {ZHIPU_MODEL}")
+    return MultimodalExtractor()
 
 
 if __name__ == "__main__":

@@ -56,6 +56,39 @@ def load_comments_from_excel(file_path: str = None) -> List[Tuple[str, float]]:
     return comments
 
 
+def load_comments_from_json(file_path: str) -> List[Tuple[str, float]]:
+    """
+    从JSON文件加载评论数据（B站爬虫输出格式）
+
+    Args:
+        file_path: JSON文件路径
+
+    Returns:
+        List of (comment, engagement) tuples
+    """
+    import json
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    comments = []
+    seen = set()
+    for item in data:
+        text = clean_comment(item.get("comment", "") or item.get("content", ""))
+        if len(text) < MIN_COMMENT_LEN:
+            continue
+        if len(text) > MAX_COMMENT_LEN:
+            text = text[:MAX_COMMENT_LEN]
+        if text in seen:
+            continue
+        engagement = float(item.get("engagement", 0) or item.get("like", 0))
+        seen.add(text)
+        comments.append((text, engagement))
+
+    print(f"JSON加载完成: {len(comments)} 条有效评论")
+    return comments
+
+
 def comment_quality_score(text: str) -> float:
     """
     评估评论质量，分数越高越像真实玩家评论（而非官方/营销语料）。
